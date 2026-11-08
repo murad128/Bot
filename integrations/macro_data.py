@@ -36,6 +36,8 @@ class FredClient:
     def __init__(self, api_key: Optional[str], session: Optional[requests.Session] = None,
                  cache_minutes: int = 180):
         self.api_key = api_key
+        from core.redact import register_secrets
+        register_secrets([api_key])
         self.session = session or requests.Session()
         self.cache: Dict[str, Tuple[datetime, YieldReading]] = {}
         self.cache_ttl = timedelta(minutes=cache_minutes)
@@ -67,8 +69,9 @@ class FredClient:
             self.last_error = None
             return r
         except Exception as exc:
-            self.last_error = str(exc)
-            log.warning("FRED %s fetch failed: %s", series, exc)
+            from core.redact import redact
+            self.last_error = redact(str(exc))
+            log.warning("FRED %s fetch failed: %s", series, self.last_error)
             return hit[1] if hit else None
 
 

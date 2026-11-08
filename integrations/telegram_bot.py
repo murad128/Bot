@@ -23,6 +23,7 @@ from typing import Callable, Dict, Optional
 import requests
 
 from config import TelegramConfig
+from core.redact import redact, register_secrets
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class TelegramNotifier:
     def __init__(self, cfg: TelegramConfig, db=None, dry_run_path: Optional[str] = None,
                  session: Optional[requests.Session] = None):
         self.cfg = cfg
+        register_secrets([cfg.bot_token])
         self.db = db
         self.session = session or requests.Session()
         # separate session for the long-polling thread (requests.Session is not thread-safe)
@@ -123,7 +125,7 @@ class TelegramNotifier:
         except Exception as exc:
             log.error("Telegram delivery failed (%s): %s", kind, exc)
             if self.db is not None:
-                self.db.outbox_add(kind, text, key, str(exc))
+                self.db.outbox_add(kind, text, key, redact(str(exc)))
             return False
         if key and self.db is not None:
             self.db.mark_notification(key, kind)
@@ -144,7 +146,7 @@ class TelegramNotifier:
                     self.db.mark_notification(m.key, m.kind)
                 sent += 1
             except Exception as exc:
-                self.db.outbox_failed(m.id, str(exc))
+                self.db.outbox_failed(m.id, redact(str(exc)))
                 break
         return sent
 

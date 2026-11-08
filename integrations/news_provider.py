@@ -68,6 +68,8 @@ class FinnhubNewsProvider(NewsProvider):
 
     def __init__(self, api_key: str, categories=("forex", "general"), session: Optional[requests.Session] = None):
         self.api_key = api_key
+        from core.redact import register_secrets
+        register_secrets([api_key])
         self.categories = categories
         self.session = session or requests.Session()
         self.available = True
@@ -78,7 +80,9 @@ class FinnhubNewsProvider(NewsProvider):
             return []
         items: List[NewsItem] = []
         for cat in self.categories:
-            resp = self.session.get(self.URL, params={"category": cat, "token": self.api_key}, timeout=15)
+            # key in the documented header, not the URL, so it never appears in error messages
+            resp = self.session.get(self.URL, params={"category": cat}, headers={"X-Finnhub-Token": self.api_key},
+                                    timeout=15)
             if resp.status_code == 429:
                 self._next_allowed = time.monotonic() + 120
                 log.warning("Finnhub rate limit hit; backing off 120s")

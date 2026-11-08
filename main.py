@@ -31,7 +31,9 @@ from config import BASE_DIR, Config, load_config
 def setup_logging(cfg: Config) -> None:
     log_dir = Path(cfg.log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
-    fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+    from core.redact import RedactingFormatter, register_secrets, secrets_from_config
+    register_secrets(secrets_from_config(cfg))
+    fmt = RedactingFormatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     root = logging.getLogger()
     root.setLevel(cfg.log_level.upper())
     for h in list(root.handlers):

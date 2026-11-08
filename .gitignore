@@ -1,17 +1,37 @@
-__pycache__/
-*.pyc
+# ---- secrets (never commit) -------------------------------------------------
 .env
-.venv/
-venv/
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+credentials*.json
+secrets*.*
+*.secret
+
+# ---- runtime state / personal data --------------------------------------------
 data/*.db
 data/*.db-*
+data/*.sqlite*
 data/backups/
 data/backtests/
 data/history/
 data/calendar_cache.json
-logs/*.log
-logs/*.log.*
-.pytest_cache/
-backups/
 data/mt5_server_offset.json
 data/bot.lock
+backups/
+*.bundle
+*.tar.gz
+logs/*
+!logs/.gitkeep
+*.log
+
+# ---- python / tooling ----------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.idea/
+.vscode/
+*.swp

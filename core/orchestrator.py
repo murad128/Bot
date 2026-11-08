@@ -132,6 +132,8 @@ class SignalBot:
         if now - self._alert_times.get(kind, -1e9) < cooldown:
             return
         self._alert_times[kind] = now
+        from core.redact import redact
+        text = redact(text)
         log.log(logging.ERROR if level == "error" else logging.WARNING, text)
         self.notifier.send(tm.system_message(level, text), kind="system")
 
