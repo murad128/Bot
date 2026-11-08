@@ -132,8 +132,13 @@ class MT5Config:
     symbol_suffix: str = _env("MT5_SYMBOL_SUFFIX", "") or ""
     # Broker server time offset from UTC in hours. "auto" = detect from ticks.
     server_utc_offset: str = _env("MT5_SERVER_UTC_OFFSET", "auto") or "auto"
+    # auto | ny_close | constant. ny_close = server clock is New York + 7h (Vantage): historical
+    # bars are converted with the offset valid on THEIR date (UTC+3 summer / UTC+2 winter).
+    server_time_mode: str = _env("MT5_SERVER_TIME_MODE", "auto") or "auto"
     timeout_ms: int = _env_int("MT5_TIMEOUT_MS", 60000)
     max_reconnect_attempts: int = _env_int("MT5_MAX_RECONNECT_ATTEMPTS", 10)
+    # Safety: refuse to run unless the logged-in account is a DEMO account
+    require_demo: bool = _env_bool("MT5_REQUIRE_DEMO", True)
     # Optional DXY / index symbols available at the broker (empty = disabled)
     dxy_symbol: Optional[str] = _env("DXY_SYMBOL")
 
@@ -234,6 +239,8 @@ class AnalysisConfig:
     trigger_lookback_m15: int = 4
     trigger_lookback_m5: int = 8
     use_m1: bool = _env_bool("USE_M1_TIMING", False)
+    # H4/D1 bar boundaries when the backtester builds them from M5: "ny_close" matches Vantage MT5
+    htf_alignment: str = _env("HTF_ALIGNMENT", "ny_close") or "ny_close"
     # execution-quality gates
     abnormal_spread_mult: float = _env_float("ABNORMAL_SPREAD_MULT", 3.0)     # x median M5 spread of last day
     week_open_buffer_min: int = _env_int("WEEK_OPEN_BUFFER_MIN", 60)

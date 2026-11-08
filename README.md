@@ -102,6 +102,10 @@ No trigger means no signal, whatever the score. This is the main defence against
   is included in net R.
 * **"No data" ≠ "no news".** If the calendar cannot be loaded, new signals
   are **blocked** by default (`BLOCK_IF_CALENDAR_UNAVAILABLE=true`).
+* **DST-correct history.** Vantage servers run on New York time + 7h, so the offset changes with US DST.
+  In `ny_close` mode (auto-detected), each bar is converted with the offset valid on its own date.
+  A constant offset would shift every bar on the other side of a DST change by one hour.
+  Backtests also build H4/D1 bars from the New York close, like the broker does.
 * **Broker time.** MT5 timestamps are in server time (Vantage: GMT+2/+3).
   The connector auto-detects the offset from live ticks (re-checked hourly for
   DST) and saves it to `data/mt5_server_offset.json`, so a restart while the
@@ -131,7 +135,7 @@ No trigger means no signal, whatever the score. This is the main defence against
 3. Create a Telegram bot with **@BotFather** → `TELEGRAM_BOT_TOKEN`. Send it a
    message and read your chat id from `https://api.telegram.org/bot<token>/getUpdates`
    → `TELEGRAM_CHAT_ID`.
-4. Diagnostics: `python main.py check` (verifies MT5 symbols, spreads, Telegram, calendar).
+4. Diagnostics: `python main.py diagnose` (full report, see §3a) or the quick `python main.py check`.
 5. **Validate before going live** (see §4).
 6. Run: `python main.py run`. To keep it running 24/5, register it as a service
    (e.g. NSSM: `nssm install fxbot <path>\.venv\Scripts\python.exe main.py run`,
@@ -142,6 +146,29 @@ Logs: `logs/system.log`, `logs/signals.log`. Without Telegram credentials all
 messages go to `logs/telegram_dryrun.log`.
 
 Telegram commands (from your chat only): `/status`, `/active`, `/report`, `/help`.
+
+### 3a. Connection diagnostic (`python main.py diagnose`)
+
+This is read-only and sends no orders. It checks, in order:
+1. environment and credentials mode;
+2. that the data source is the **official** MetaTrader5 package, not CSV, synthetic or mock data;
+3. the trading lock, which makes `order_send` and every other trading call raise `PermissionError`, and the demo-only guard;
+4. terminal connection, account (DEMO, Vantage, balance, equity, currency, leverage; login masked, holder name never read);
+5. the gold symbol, including any suffix;
+6. live bid/ask/spread and the server time offset;
+7. XAUUSD M5/M15/H1/H4/D1 history (default 60 days, saved to `data/history/`): duplicates, invalid bars, future
+   timestamps, weekend / daily-break / unexpected gaps, freshness;
+8. consistency of broker M15/H1/H4/D1 bars with bars rebuilt from M5, which proves the time conversion and the
+   backtest's H4/D1 alignment;
+9. Telegram (`getMe` + one test message; skip it with `--no-telegram`);
+10. the economic calendar;
+11. one signal-engine pass per symbol on live data (nothing is sent or stored).
+
+The redacted report is written to `logs/diagnostics/diagnostic_<time>.md`.
+
+Safety guards that always apply:
+- `MT5_REQUIRE_DEMO=true`: the bot refuses to connect to a non-demo account.
+- `main.py run` refuses `DATA_PROVIDER=csv`; with `--offline`, Telegram is forced off.
 
 ## 4. Backtesting & validation workflow
 

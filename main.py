@@ -3,7 +3,8 @@
 Forex & Gold signal bot - command line entry point.
 
   python main.py run                      live loop (MT5 -> analysis -> Telegram)
-  python main.py check                    diagnostics: config, MT5, Telegram, calendar
+  python main.py diagnose                 full MT5/Telegram/data/engine diagnostic report (read-only)
+  python main.py check                    quick diagnostics: config, MT5, Telegram, calendar
   python main.py scan [--symbol XAUUSD]   one analysis pass, prints decisions (no Telegram)
   python main.py download --symbol XAUUSD --days 365           MT5 history -> data/history
   python main.py backtest --symbol XAUUSD --data data/history/XAUUSD_M5.csv
@@ -55,9 +56,25 @@ def setup_logging(cfg: Config) -> None:
 
 
 # ---------------------------------------------------------------------------
+def production_guard(cfg, offline: bool) -> str:
+    """Live mode must read real MT5 data. Offline (CSV) runs never send Telegram messages."""
+    if cfg.data_provider.lower() == "mt5":
+        return ""
+    if not offline:
+        return (f"DATA_PROVIDER={cfg.data_provider} is not a live data source. Refusing to run the live bot "
+                "(it would send signals based on file data). Use DATA_PROVIDER=mt5, or --offline for a dry run.")
+    cfg.telegram.bot_token = None          # offline runs never reach Telegram
+    cfg.telegram.chat_id = None
+    return ""
+
+
 def cmd_run(cfg, args):
     from core.instance_lock import AlreadyRunning, InstanceLock
     from core.orchestrator import SignalBot
+    problem = production_guard(cfg, getattr(args, "offline", False))
+    if problem:
+        logging.getLogger("main").error(problem)
+        return 2
     try:
         lock = InstanceLock(str(BASE_DIR / "data" / "bot.lock")).acquire()
     except AlreadyRunning as exc:
@@ -127,6 +144,15 @@ def cmd_check(cfg, args):
     print("== DXY symbol:", cfg.mt5.dxy_symbol or "not configured (optional, gold macro)")
     print("RESULT:", "OK" if ok else "PROBLEMS FOUND")
     return 0 if ok else 1
+
+
+def cmd_diagnose(cfg, args):
+    from core.diagnostics import run_diagnostics, write_report
+    rep = run_diagnostics(cfg, days=args.days, send_telegram=not args.no_telegram, run_engine=not args.no_engine)
+    print(rep.to_console())
+    path = write_report(rep)
+    print(f"\nFull report: {path}")
+    return 0 if rep.ok else 1
 
 
 def cmd_scan(cfg, args):
@@ -283,7 +309,12 @@ def cmd_test_telegram(cfg, args):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Forex & Gold signal bot (signal-only)")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("run")
+    p = sub.add_parser("run")
+    p.add_argument("--offline", action="store_true", help="allow DATA_PROVIDER=csv (Telegram forced off)")
+    p = sub.add_parser("diagnose", help="MT5/Telegram/data/engine diagnostic report (read-only)")
+    p.add_argument("--days", type=int, default=60, help="days of XAUUSD history to download and check")
+    p.add_argument("--no-telegram", action="store_true", help="do not send the Telegram test message")
+    p.add_argument("--no-engine", action="store_true", help="skip the signal-engine pass")
     sub.add_parser("check")
     p = sub.add_parser("scan")
     p.add_argument("--symbol")
@@ -320,7 +351,7 @@ def main(argv=None) -> int:
     cfg = load_config()
     setup_logging(cfg)
     handler = {
-        "run": cmd_run, "check": cmd_check, "scan": cmd_scan, "download": cmd_download,
+        "run": cmd_run, "diagnose": cmd_diagnose, "check": cmd_check, "scan": cmd_scan, "download": cmd_download,
         "backtest": cmd_backtest, "walkforward": cmd_walkforward, "report": cmd_report,
         "review": cmd_review, "recommendations": cmd_recommendations, "test-telegram": cmd_test_telegram,
     }[args.cmd]

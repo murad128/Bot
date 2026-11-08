@@ -176,7 +176,7 @@ class Backtester:
         base.index = base.index.as_unit("ns")      # pandas 3 may default to us resolution
         frames = {Timeframe.M5: prepare_frame(base)}
         for tf in HTFS:
-            frames[tf] = prepare_frame(resample(base, tf))
+            frames[tf] = prepare_frame(resample(base, tf, self.cfg.analysis.htf_alignment))
         close_ns = {tf: (df.index + pd.Timedelta(minutes=tf.minutes)).as_unit("ns").asi8
                     for tf, df in frames.items()}
         # full-history M15 structure for the cancellation rule (opposite CHOCH)

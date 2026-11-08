@@ -17,6 +17,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -76,11 +77,32 @@ def save_csv(df: pd.DataFrame, path: str) -> None:
     out.to_csv(path)
 
 
-def resample(df: pd.DataFrame, tf: Timeframe) -> pd.DataFrame:
-    """Aggregate to a higher timeframe. Bars are labelled by OPEN time (UTC)."""
+_NY = ZoneInfo("America/New_York")
+_NY_CLOSE_SHIFT = pd.Timedelta(hours=7)     # 17:00 New York -> 00:00 of the next trading day
+
+
+def resample(df: pd.DataFrame, tf: Timeframe, alignment: str = "ny_close") -> pd.DataFrame:
+    """
+    Aggregate to a higher timeframe. Bars are labelled by OPEN time (UTC).
+
+    alignment="ny_close" (default): H4 and D1 bars start at the New York close
+    (17:00 New York, DST-aware), the convention of GMT+2/+3 brokers such as
+    Vantage, so backtest H4/D1 bars match what MT5 delivers live.
+    alignment="utc": bars start at UTC midnight. Timeframes up to H1 are
+    identical under both conventions.
+    """
     agg = {"open": "first", "high": "max", "low": "min", "close": "last", "tick_volume": "sum"}
     if "spread_price" in df.columns:
         agg["spread_price"] = "mean"
+    if alignment == "ny_close" and tf in (Timeframe.H4, Timeframe.D1) and len(df):
+        tmp = df.copy()
+        tmp.index = (df.index.tz_convert(_NY) + _NY_CLOSE_SHIFT).tz_localize(None)   # NY wall clock, shifted
+        out = tmp.resample(tf.pandas_rule, label="left", closed="left").agg(agg)
+        out = out.dropna(subset=["open", "high", "low", "close"])
+        idx = (out.index - _NY_CLOSE_SHIFT).tz_localize(_NY, ambiguous="NaT", nonexistent="shift_forward")
+        out.index = idx.tz_convert("UTC").as_unit(df.index.unit)
+        out.index.name = df.index.name
+        return out[out.index.notna()]
     out = df.resample(tf.pandas_rule, label="left", closed="left").agg(agg)
     return out.dropna(subset=["open", "high", "low", "close"])
 

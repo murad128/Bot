@@ -41,7 +41,8 @@ class FakeMT5:
         return SimpleNamespace(connected=self.connected, name="fake", build=1)
 
     def account_info(self):
-        return SimpleNamespace(server="Vantage-Demo")
+        return SimpleNamespace(server="Vantage-Demo", login=1234567, trade_mode=0, currency="USD",
+                               balance=1000.0, equity=1000.0, leverage=100, company="Vantage")
 
     def symbol_info(self, name):
         return self.symbols.get(name)
