@@ -20,6 +20,20 @@ The repository was **empty** (no commits, no files). There was no existing
 code to audit, so the project was built from scratch to the requested
 architecture. Everything below is new.
 
+### Audit log (second pass)
+
+A backup was taken first (`backups/code_backup_*.tar.gz`, git tag `backup-before-audit-*`).
+Each bug below was reproduced before it was fixed, and each has a regression test (`tests/test_audit_fixes.py`).
+
+| Issue found | Impact | Fix |
+|---|---|---|
+| Tracker skipped the M1 bar that contained the entry moment | a stop hit in the first minute was missed → optimistic live stats | entry-minute bar is included (pessimistic) |
+| MT5 offset assumed 0 when started with the market closed | every bar shifted 2–3 h; `download` would write wrong history | persisted offset; error instead of guess; tracking/scanning paused while the market is closed |
+| No protection against two running instances | duplicate signals | OS file lock |
+| Telegram command thread shared the sender's HTTP session | possible thread-safety errors | separate session |
+| Live-loop test passed even with zero signals | weak test | now asserts signals, single delivery, resolution, post-mortems |
+| Missing execution-quality gates | signals at rollover spreads / Monday gaps / pre-weekend | abnormal-spread, week-open and week-close gates; gold double-macro-conflict rejection |
+
 ## 2. Architecture
 
 ```
@@ -52,18 +66,18 @@ backtesting/
   historical_data.py         MT5-export/generic CSV loader, resampling, MT5 downloader, synthetic data (tests only)
   backtest_engine.py         event-driven backtest reusing the live engine
   strategy_optimizer.py      walk-forward validation + fixed-parameter holdout
-tests/                       67 tests (unit, no-look-ahead, integration, end-to-end)
+tests/                       78 tests (unit, no-look-ahead, integration, end-to-end, audit regressions)
 ```
 
 ### Decision pipeline (per symbol, on every closed M5 bar)
 
 | Step | Timeframes | What happens |
 |---|---|---|
-| Hard gates | – | allowed session, spread ≤ max, enough history, daily/active/currency limits, cooldown, consecutive-loss pause |
+| Hard gates | – | allowed session, spread ≤ max **and** ≤ 3× the day's median spread, no signals in the first 60 min after the weekly open or the last 120 min before the weekly close, enough history, daily/active/currency limits, cooldown, consecutive-loss pause |
 | HTF bias | D1 25 %, H4 40 %, H1 35 % | EMA 50/200 position and slope, Supertrend, SMC structure → direction or **wait** |
 | Setup | M15 | price **at** a valid OB/FVG, liquidity sweep, breakout-retest, or EMA pullback in trend |
 | Confirmation | M5 (M1 optional) | CHOCH/BOS or engulfing/pin bar in the trade direction |
-| Fundamentals | – | blackout around high-impact news (wider for gold tier-1 USD events); gold DXY/yield conflict warnings |
+| Fundamentals | – | blackout around high-impact news (wider for gold tier-1 USD events); gold: one DXY/yield conflict = warning, both = reject |
 | Risk plan | M15 ATR | SL beyond structure + 0.25 ATR + spread (1–3 ATR, wider ⇒ reject); TPs 1R/2R/3R (TP3 extended to liquidity); reject if opposing liquidity < 2R away |
 | Score | – | 9 weighted components → 0–100; signal only if ≥ `MIN_SIGNAL_SCORE` (70) |
 
@@ -89,8 +103,12 @@ No trigger means no signal, whatever the score. This is the main defence against
 * **"No data" ≠ "no news".** If the calendar cannot be loaded, new signals
   are **blocked** by default (`BLOCK_IF_CALENDAR_UNAVAILABLE=true`).
 * **Broker time.** MT5 timestamps are in server time (Vantage: GMT+2/+3).
-  The connector auto-detects the offset from live ticks or uses
-  `MT5_SERVER_UTC_OFFSET`.
+  The connector auto-detects the offset from live ticks (re-checked hourly for
+  DST) and saves it to `data/mt5_server_offset.json`, so a restart while the
+  market is closed still converts correctly. With no fresh tick and no saved
+  value it raises an error instead of guessing.
+* **Single instance.** `main.py run` holds an OS file lock (`data/bot.lock`);
+  a second instance refuses to start, so duplicates can't come from two bots.
 * **Weak SMC zones are scored down, not used.** OBs with low displacement,
   repeated touches, no FVG, or price already away from the zone (> 0.5 ATR)
   score lower, or are not counted as a setup at all.
@@ -158,8 +176,8 @@ python main.py walkforward --symbol XAUUSD --data data/history/XAUUSD_M5.csv --t
 ## 6. Testing
 
 ```
-pytest -m "not slow"      # 65 fast tests (~2 s)
-pytest -m slow            # end-to-end backtest + live-loop replay on synthetic data (~3 min)
+pytest -m "not slow"      # 75 fast tests (~5 s)
+pytest -m slow            # end-to-end backtest, gold-gate scan, live-loop replay on synthetic data (~3 min)
 ```
 
 Synthetic data is used **only** to test mechanics. The numbers it produces

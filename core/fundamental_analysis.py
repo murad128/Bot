@@ -35,6 +35,7 @@ class FundamentalAssessment:
     reasons: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     conflict: bool = False
+    conflicts: int = 0                 # number of independent macro inputs against the trade
     upcoming: List[CalendarEvent] = field(default_factory=list)
     data_available: bool = False
 
@@ -137,6 +138,7 @@ class FundamentalAnalyzer:
             else:
                 a.score -= 0.25
                 a.conflict = True
+                a.conflicts += 1
                 a.warnings.append(f"Fundamental conflict: DXY {'rising' if dxy.trend > 0 else 'falling'} against gold {direction.value}")
         ylds = {}
         try:
@@ -161,4 +163,5 @@ class FundamentalAnalyzer:
         else:
             a.score -= 0.2
             a.conflict = True
+            a.conflicts += 1
             a.warnings.append(f"Fundamental conflict: US 10Y {label} yield {chg:+.0f}bp/5d against gold {direction.value}")

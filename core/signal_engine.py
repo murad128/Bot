@@ -35,7 +35,8 @@ from core.fundamental_analysis import FundamentalAnalyzer, FundamentalAssessment
 from core.price_action import (candle_patterns, detect_breakout_retest, detect_false_breakouts,
                                list_swings, nearest_level, support_resistance)
 from core.risk_management import PlanRequest, RiskManager
-from core.sessions import is_session_allowed, primary_session, session_label
+from core.sessions import (is_session_allowed, minutes_since_week_open, minutes_to_week_close,
+                           primary_session, session_label)
 from core.smc_analysis import SMCAnalyzer, SMCSnapshot
 from core.technical_analysis import compute_indicators
 
@@ -151,6 +152,20 @@ class SignalEngine:
         if spread_pips > spec.max_spread_pips:
             res.rejections.append(f"Spread {spread_pips:.1f} pips > max {spec.max_spread_pips}")
             return res
+        a = cfg.analysis
+        if minutes_since_week_open(ctx.now) < a.week_open_buffer_min:
+            res.rejections.append(f"Weekly open buffer ({a.week_open_buffer_min} min): gaps and wide spreads")
+            return res
+        if minutes_to_week_close(ctx.now) < a.week_close_buffer_min:
+            res.rejections.append(f"Too close to the weekly close ({a.week_close_buffer_min} min): weekend gap risk")
+            return res
+        m5_spreads = ctx.frames[Timeframe.M5]["spread_price"].tail(288) if "spread_price" in ctx.frames[Timeframe.M5] else None
+        if m5_spreads is not None:
+            typical = float(m5_spreads.median()) if m5_spreads.notna().sum() >= 50 else float("nan")
+            if typical > 0 and spread > a.abnormal_spread_mult * typical:
+                res.rejections.append(f"Abnormal spread {spread_pips:.1f} pips (> {a.abnormal_spread_mult:g}x typical "
+                                      f"{spec.to_pips(typical):.1f})")
+                return res
         if ctx.portfolio_rejections:
             res.rejections.extend(ctx.portfolio_rejections)
             return res
@@ -189,7 +204,6 @@ class SignalEngine:
         name = "bullish" if d > 0 else "bearish"
 
         # ---- 3. entry trigger --------------------------------------------
-        a = cfg.analysis
         snap15 = self.smc(ctx.symbol, Timeframe.M15, m15)
         smc15 = snap15.assess(d, a.trigger_lookback_m15, a.ob_min_displacement_atr)
 
@@ -244,6 +258,10 @@ class SignalEngine:
             fa = FundamentalAssessment(False, None, 0.5, warnings=["Fundamental module disabled"])
         if fa.blocked:
             res.rejections.append(fa.block_reason or "News blackout")
+            return res
+        if spec.is_gold and fa.conflicts > a.gold_max_macro_conflicts:
+            res.rejections.append(f"Gold macro contradicts the technical {direction.value} "
+                                  f"({fa.conflicts} conflicting inputs)")
             return res
 
         # ---- 5. risk plan ------------------------------------------------

@@ -87,7 +87,9 @@ class SignalTracker:
                          bar_minutes: int = 1) -> List[TradeEvent]:
         """
         Feed closed bars (BID OHLC, UTC open-time index) that closed after the
-        last check. Bars that opened before the signal time are skipped.
+        last check. The bar that CONTAINS the signal time is included: its
+        range may contain a few seconds from before entry, which can only make
+        the result more pessimistic, whereas skipping it could miss a stop.
         """
         last = _aware(rec.last_checked_at) or _aware(rec.created_at)
         created = _aware(rec.created_at)
@@ -97,7 +99,7 @@ class SignalTracker:
         for ts, row in bars.iterrows():
             t_open = ts.to_pydatetime()
             t_close = t_open + step
-            if t_open < created or t_close <= last:
+            if t_close <= created or t_close <= last:
                 continue
             sp = float(row["spread_price"]) if "spread_price" in row and not pd.isna(row["spread_price"]) else spread
             evs = st.update_bar(float(row["high"]), float(row["low"]), float(row["close"]), t_close, sp)

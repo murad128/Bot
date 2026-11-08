@@ -19,8 +19,10 @@ Broker time
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -48,14 +50,19 @@ def _import_mt5():
 class MT5DataProvider(DataProvider):
     name = "mt5"
 
-    def __init__(self, cfg: MT5Config, mt5_module=None):
+    def __init__(self, cfg: MT5Config, mt5_module=None, state_path: Optional[str] = None):
         self.cfg = cfg
         self._mt5 = mt5_module
         self._connected = False
         self._offset_hours: Optional[int] = None
         self._offset_checked_at = 0.0
+        self._offset_fresh = False
+        self.state_path = Path(state_path) if state_path else None
         if cfg.server_utc_offset not in ("auto", ""):
             self._offset_hours = int(cfg.server_utc_offset)
+            self._offset_fresh = True
+        else:
+            self._offset_hours = self._load_offset()
 
     @property
     def mt5(self):
@@ -111,10 +118,17 @@ class MT5DataProvider(DataProvider):
 
     # ------------------------------------------------------------------ time
     def server_offset(self, probe_symbol: Optional[str] = None) -> int:
-        """Hours to subtract from MT5 timestamps to obtain UTC."""
+        """
+        Hours to subtract from MT5 timestamps to obtain UTC.
+
+        Order of preference: explicit MT5_SERVER_UTC_OFFSET -> detected from a
+        fresh tick (re-checked hourly, catches DST changes) -> last detected
+        value persisted on disk. If none is known, raise instead of guessing:
+        a wrong offset silently shifts every bar by hours.
+        """
         if self.cfg.server_utc_offset not in ("auto", ""):
             return int(self.cfg.server_utc_offset)
-        if self._offset_hours is not None and time.monotonic() - self._offset_checked_at < 3600:
+        if self._offset_fresh and time.monotonic() - self._offset_checked_at < 3600:
             return self._offset_hours
         if probe_symbol:
             t = self.mt5.symbol_info_tick(probe_symbol)
@@ -126,12 +140,34 @@ class MT5DataProvider(DataProvider):
                     if self._offset_hours not in (None, hours):
                         log.info("MT5 server UTC offset changed %s -> %s", self._offset_hours, hours)
                     self._offset_hours = hours
+                    self._offset_fresh = True
                     self._offset_checked_at = time.monotonic()
+                    self._save_offset(hours)
         if self._offset_hours is None:
-            log.warning("Could not auto-detect MT5 server offset (market closed?) - assuming 0. "
-                        "Set MT5_SERVER_UTC_OFFSET explicitly to avoid this.")
-            return 0
+            raise DataProviderError(
+                "MT5 server UTC offset unknown (market closed, no fresh tick and no saved value). "
+                "Set MT5_SERVER_UTC_OFFSET (Vantage: 2 in winter, 3 in summer) or retry when the market is open.")
         return self._offset_hours
+
+    def _load_offset(self) -> Optional[int]:
+        if not self.state_path or not self.state_path.exists():
+            return None
+        try:
+            v = int(json.loads(self.state_path.read_text())["offset_hours"])
+            log.info("Using last detected MT5 server offset %+d h (will re-detect from live ticks)", v)
+            return v
+        except Exception:
+            return None
+
+    def _save_offset(self, hours: int) -> None:
+        if not self.state_path:
+            return
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_path.write_text(json.dumps({"offset_hours": hours,
+                                                   "detected_at": datetime.now(timezone.utc).isoformat()}))
+        except Exception as exc:
+            log.debug("Could not persist MT5 offset: %s", exc)
 
     # ------------------------------------------------------------------ symbols
     def resolve_symbol(self, inst: InstrumentConfig) -> Optional[str]:

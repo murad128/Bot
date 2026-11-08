@@ -50,7 +50,7 @@ def build_provider(cfg: Config) -> DataProvider:
         from core.market_data import CSVDataProvider
         return CSVDataProvider(cfg.csv_data_dir)
     from integrations.mt5_connector import MT5DataProvider
-    return MT5DataProvider(cfg.mt5)
+    return MT5DataProvider(cfg.mt5, state_path=str(BASE_DIR / "data" / "mt5_server_offset.json"))
 
 
 class SignalBot:
@@ -148,8 +148,8 @@ class SignalBot:
                           else "Signals continue WITHOUT news filtering."))
         self.poll_headlines(now)
         self.send_news_alerts(now)
-        self.update_open_signals(now)
         if is_fx_market_open(now):
+            self.update_open_signals(now)
             for sym in self.cfg.active_symbols:
                 if self._stop.is_set():
                     break

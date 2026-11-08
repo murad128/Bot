@@ -9,7 +9,7 @@ Sessions (local time):
 """
 from __future__ import annotations
 
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import List
 from zoneinfo import ZoneInfo
 
@@ -81,3 +81,25 @@ def is_session_allowed(now: datetime, allowed: List[str]) -> bool:
     if not allowed:
         return True
     return any(s in allowed for s in active_sessions(now))
+
+
+def minutes_since_week_open(now: datetime) -> float:
+    """Minutes since the Sunday 17:00 New York open (inf if the market is closed)."""
+    local = _as_utc(now).astimezone(_NY)
+    if not is_fx_market_open(now):
+        return float("inf")
+    days_back = (local.weekday() - 6) % 7          # back to Sunday
+    opened = (local - timedelta(days=days_back)).replace(hour=17, minute=0, second=0, microsecond=0)
+    if opened > local:
+        opened -= timedelta(days=7)
+    return (local - opened).total_seconds() / 60.0
+
+
+def minutes_to_week_close(now: datetime) -> float:
+    """Minutes until the Friday 17:00 New York close (inf if the market is closed)."""
+    local = _as_utc(now).astimezone(_NY)
+    if not is_fx_market_open(now):
+        return float("inf")
+    days_ahead = (4 - local.weekday()) % 7
+    close = (local + timedelta(days=days_ahead)).replace(hour=17, minute=0, second=0, microsecond=0)
+    return (close - local).total_seconds() / 60.0

@@ -36,6 +36,8 @@ class TelegramNotifier:
         self.cfg = cfg
         self.db = db
         self.session = session or requests.Session()
+        # separate session for the long-polling thread (requests.Session is not thread-safe)
+        self.poll_session = requests.Session() if session is None else session
         self.dry_run_path = Path(dry_run_path) if dry_run_path else None
         self._lock = threading.Lock()
         self._last_send = 0.0
@@ -49,9 +51,9 @@ class TelegramNotifier:
         return self.cfg.enabled
 
     # ------------------------------------------------------------------ low level
-    def _api(self, method: str, payload: dict, timeout: Optional[int] = None) -> dict:
+    def _api(self, method: str, payload: dict, timeout: Optional[int] = None, session=None) -> dict:
         url = API.format(token=self.cfg.bot_token, method=method)
-        resp = self.session.post(url, json=payload, timeout=timeout or self.cfg.timeout_s)
+        resp = (session or self.session).post(url, json=payload, timeout=timeout or self.cfg.timeout_s)
         try:
             data = resp.json()
         except ValueError:
@@ -171,7 +173,7 @@ class TelegramNotifier:
                 payload = {"timeout": 25, "allowed_updates": ["message"]}
                 if self._offset is not None:
                     payload["offset"] = self._offset
-                data = self._api("getUpdates", payload, timeout=35)
+                data = self._api("getUpdates", payload, timeout=35, session=self.poll_session)
                 for upd in data.get("result", []):
                     self._offset = upd["update_id"] + 1
                     msg = upd.get("message") or {}

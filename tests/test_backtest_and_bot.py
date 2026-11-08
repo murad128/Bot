@@ -158,6 +158,10 @@ def test_live_loop_end_to_end(cfg, tmp_path):
         assert keys.count(f"signal:{r.id}") == 1
     report = bot.build_daily_report(t)
     assert "DAILY PERFORMANCE REPORT" in report
-    dry = (tmp_path / "logs" / "telegram_dryrun.log")
-    if sigs:
-        assert dry.exists() and "SIGNAL" in dry.read_text()
+    assert sigs, "the replay is expected to produce at least one signal"
+    dry = (tmp_path / "logs" / "telegram_dryrun.log").read_text()
+    assert dry.count("SIGNAL</b>") == len(sigs)
+    closed = [r for r in sigs if r.outcome != "OPEN"]
+    assert closed, "at least one signal should resolve within 4 days"
+    for r in closed:
+        assert r.review.get("notes"), "closed signals get a post-mortem"

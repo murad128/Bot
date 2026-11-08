@@ -54,8 +54,17 @@ def setup_logging(cfg: Config) -> None:
 
 # ---------------------------------------------------------------------------
 def cmd_run(cfg, args):
+    from core.instance_lock import AlreadyRunning, InstanceLock
     from core.orchestrator import SignalBot
-    SignalBot(cfg).run_forever()
+    try:
+        lock = InstanceLock(str(BASE_DIR / "data" / "bot.lock")).acquire()
+    except AlreadyRunning as exc:
+        logging.getLogger("main").error("%s - refusing to start a second instance.", exc)
+        return 2
+    try:
+        SignalBot(cfg).run_forever()
+    finally:
+        lock.release()
 
 
 def cmd_check(cfg, args):

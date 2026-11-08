@@ -12,3 +12,6 @@ data/calendar_cache.json
 logs/*.log
 logs/*.log.*
 .pytest_cache/
+backups/
+data/mt5_server_offset.json
+data/bot.lock

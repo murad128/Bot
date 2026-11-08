@@ -234,6 +234,11 @@ class AnalysisConfig:
     trigger_lookback_m15: int = 4
     trigger_lookback_m5: int = 8
     use_m1: bool = _env_bool("USE_M1_TIMING", False)
+    # execution-quality gates
+    abnormal_spread_mult: float = _env_float("ABNORMAL_SPREAD_MULT", 3.0)     # x median M5 spread of last day
+    week_open_buffer_min: int = _env_int("WEEK_OPEN_BUFFER_MIN", 60)
+    week_close_buffer_min: int = _env_int("WEEK_CLOSE_BUFFER_MIN", 120)
+    gold_max_macro_conflicts: int = _env_int("GOLD_MAX_MACRO_CONFLICTS", 1)  # reject above this
     allowed_sessions: List[str] = field(default_factory=lambda: _env_list(
         "ALLOWED_SESSIONS", ["London", "New York"]))
     gold_allowed_sessions: List[str] = field(default_factory=lambda: _env_list(
