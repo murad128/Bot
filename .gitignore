@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+data/*.db
+data/*.db-*
+data/backups/
+data/backtests/
+data/history/
+data/calendar_cache.json
+logs/*.log
+logs/*.log.*
+.pytest_cache/

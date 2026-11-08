@@ -1,0 +1,15 @@
+# Core
+numpy>=1.26
+pandas>=2.2
+requests>=2.31
+SQLAlchemy>=2.0
+python-dotenv>=1.0
+
+# Broker data - official MetaQuotes package, Windows only (the VPS running the MT5 terminal)
+MetaTrader5>=5.0.45; sys_platform == "win32"
+
+# Optional: PostgreSQL instead of SQLite (set DATABASE_URL=postgresql+psycopg://...)
+# psycopg[binary]>=3.1
+
+# Tests
+pytest>=8.0
