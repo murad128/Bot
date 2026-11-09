@@ -121,6 +121,51 @@ def classify_gaps(df: pd.DataFrame, tf: Timeframe) -> Dict[str, list]:
     return out
 
 
+def expected_missing_bars(last_close: datetime, now: datetime, tf: Timeframe,
+                          grace: timedelta = timedelta(minutes=5)) -> int:
+    """
+    Number of bars that should have closed after `last_close` (and before
+    now - grace) but are not in the data.
+
+    A bar ending at t is expected only if its last minute is inside market
+    hours, so the weekend closure (Friday 17:00 -> Sunday 17:00 New York) produces
+    no expected bars, whatever the timeframe. H4/D1 boundaries follow the New
+    York wall clock, as Vantage builds them, so DST weeks are counted correctly. Bars whose last minute falls in
+    the hour after the New York close are not counted either: gold has a daily
+    break there and FX rollover can delay the first bars.
+    """
+    from zoneinfo import ZoneInfo
+    from core.sessions import is_fx_market_open
+    ny = ZoneInfo("America/New_York")
+    step = timedelta(minutes=tf.minutes)
+    limit = now - grace
+    # H4/D1 bars sit on the New York wall clock (17:00 + k*4h / 17:00 daily), which moves by one
+    # hour in UTC when DST changes; step along that clock so the grid stays correct across DST.
+    # Up to H1 every boundary is a whole UTC hour, so UTC steps are exact.
+    wall_clock = tf in (Timeframe.H4, Timeframe.D1)
+    cursor = last_close.astimezone(ny).replace(tzinfo=None) if wall_clock else last_close
+    missing = 0
+    while True:
+        cursor = cursor + step
+        t = cursor.replace(tzinfo=ny).astimezone(timezone.utc) if wall_clock else cursor
+        if t > limit:
+            break
+        last_minute = t - timedelta(minutes=1)
+        in_break = last_minute.astimezone(ny).hour == 17   # 17:00-17:59 New York: daily break / rollover
+        if is_fx_market_open(last_minute) and not in_break:
+            missing += 1
+    return missing
+
+
+def is_history_stale(last_close: datetime, now: datetime, tf: Timeframe, tolerance: int = 1) -> bool:
+    """
+    True if MORE than `tolerance` expected bars are missing (default: one late
+    bar is tolerated, two or more missing bars are flagged - the same policy as
+    the original `lag > 2 bars + 5 min` rule, but weekend-correct).
+    """
+    return expected_missing_bars(last_close, now, tf) > tolerance
+
+
 def consistency(base: pd.DataFrame, broker: pd.DataFrame, tf: Timeframe, alignment: str, point: float) -> Optional[float]:
     """Share of broker bars whose high/low/close equal the bars rebuilt from M5 (within 1 point)."""
     from backtesting.historical_data import resample
@@ -306,9 +351,9 @@ def run_diagnostics(cfg: Config, provider=None, notifier=None, days: int = 60, s
                         "Set MT5_SERVER_UTC_OFFSET explicitly (2 in winter, 3 in summer for Vantage).")
                 continue
             last_close = df.index[-1] + pd.Timedelta(minutes=tf.minutes)
-            lag = datetime.now(timezone.utc) - last_close.to_pydatetime()
-            stale = tick is not None and (datetime.now(timezone.utc) - tick.time).total_seconds() < 300 \
-                and lag > timedelta(minutes=2 * tf.minutes + 5)
+            now_utc = datetime.now(timezone.utc)
+            stale = tick is not None and (now_utc - tick.time).total_seconds() < 300 \
+                and is_history_stale(last_close.to_pydatetime(), now_utc, tf)
             others = gaps["other"]
             status = "FAIL" if stale else "WARN" if len(others) > 3 else "PASS"
             detail = f"{len(df)} bars, last closed bar {last_close:%Y-%m-%d %H:%M} UTC, " \
