@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from core.domain import SignalCandidate, SymbolSpec
-from core.performance_analyzer import Stats, fmt_pct, fmt_pf
+from core.performance_analyzer import DayActivity, OpenTrade, Stats, fmt_pct, fmt_pf
 
 DISCLAIMER = ("<i>Signal only - not financial advice. No result is guaranteed; "
               "the score measures confluence, not probability of success.</i>")
@@ -109,35 +109,60 @@ def _row(name: str, s: Stats) -> str:
     return f"{esc(name)}: {s.resolved} res, WR {fmt_pct(s.win_rate)}, {s.net_r:+.2f}R"
 
 
+def _open_line(t: OpenTrade) -> str:
+    if t.tp_hits:
+        state = f"TP{t.tp_hits} hit" + (", stop at breakeven" if t.stop_at_entry else ", stop trailed")
+    else:
+        state = "no TP yet"
+    return f"• #{t.signal_id} {esc(t.symbol)} {esc(t.direction)} – {state}, realised so far {t.realized_r:+.2f}R"
+
+
 def daily_report_message(day: str, created: Stats, closed: Stats, by_symbol: Dict[str, Stats],
                          by_session: Dict[str, Stats], best_symbol: Optional[str], best_session: Optional[str],
-                         open_count: int, all_time: Optional[Stats] = None) -> str:
+                         open_count: int, all_time: Optional[Stats] = None,
+                         activity: Optional[DayActivity] = None,
+                         open_list: Optional[List[OpenTrade]] = None) -> str:
+    act = activity or DayActivity()
+    opens = open_list or []
+    open_r = sum(t.realized_r for t in opens)
     lines = [
         f"📊 <b>DAILY PERFORMANCE REPORT – {esc(day)}</b>",
+        f"<i>Day: {esc(day)} 00:00–24:00 UTC</i>",
         "",
         f"<b>Signals issued today:</b> {created.total}",
-        f"<b>Signals closed today:</b> {closed.total - closed.open}",
-        f"TP1 Hit: {closed.tp1}",
-        f"TP2 Hit: {closed.tp2}",
-        f"TP3 Hit: {closed.tp3}",
-        f"Stop Loss (before TP1): {closed.sl}",
-        f"Expired: {closed.expired}",
-        f"Cancelled: {closed.cancelled}",
-        f"Still open: {open_count}",
         "",
+        "<b>Today's activity</b> (by event time)",
+        f"TP1 Hit: {act.tp1}",
+        f"TP2 Hit: {act.tp2}",
+        f"TP3 Hit: {act.tp3}",
+        f"Stop Loss (before TP1): {act.sl_before_tp1}",
+        f"Stopped at breakeven / trailed stop: {act.breakeven_stops} / {act.trailed_stops}",
+        f"Expired: {act.expired}  Cancelled: {act.cancelled}",
+        f"<b>Realised R today (incl. partial exits):</b> {act.realized_r:+.2f}R",
+        "",
+        "<b>Trades closed today</b> (final results)",
+        f"Closed: {closed.total - closed.open}  (stop loss before TP1 {closed.sl}, expired {closed.expired}, "
+        f"cancelled {closed.cancelled})",
         f"<b>Wins / Losses / BE:</b> {closed.wins} / {closed.losses} / {closed.breakeven}",
         f"<b>Win Rate:</b> {fmt_pct(closed.win_rate)} (based on {closed.resolved} resolved trades)",
-        f"<b>Net result:</b> {closed.net_r:+.2f}R",
+        f"<b>Total R of trades closed today:</b> {closed.net_r:+.2f}R (whole trades, incl. partials taken earlier)",
         f"<b>Profit factor:</b> {fmt_pf(closed.profit_factor)}",
-        f"<b>Max drawdown (day):</b> {closed.max_drawdown_r:.2f}R",
+        f"<b>Max drawdown (closed today):</b> {closed.max_drawdown_r:.2f}R",
         "",
-        f"<b>Best Instrument:</b> {esc(best_symbol or 'n/a')}",
-        f"<b>Best Session:</b> {esc(best_session or 'n/a')}",
+        f"<b>Open trades:</b> {open_count}",
+    ]
+    lines += [_open_line(t) for t in opens[:10]]
+    if opens:
+        lines.append(f"Cumulative realised R on open trades: {open_r:+.2f}R")
+    lines += [
+        "",
+        f"<b>Best Instrument</b> (closed today): {esc(best_symbol or 'n/a')}",
+        f"<b>Best Session</b> (closed today): {esc(best_session or 'n/a')}",
     ]
     if by_symbol:
-        lines += ["", "<b>By instrument:</b>"] + [f"• {_row(k, v)}" for k, v in by_symbol.items()]
+        lines += ["", "<b>By instrument (closed today):</b>"] + [f"• {_row(k, v)}" for k, v in by_symbol.items()]
     if by_session:
-        lines += ["", "<b>By session:</b>"] + [f"• {_row(k, v)}" for k, v in by_session.items()]
+        lines += ["", "<b>By session (closed today):</b>"] + [f"• {_row(k, v)}" for k, v in by_session.items()]
     if all_time is not None and all_time.resolved:
         lines += ["", f"<b>All-time:</b> {all_time.resolved} resolved, WR {fmt_pct(all_time.win_rate)}, "
                       f"{all_time.net_r:+.2f}R, PF {fmt_pf(all_time.profit_factor)}, "
@@ -145,9 +170,11 @@ def daily_report_message(day: str, created: Stats, closed: Stats, by_symbol: Dic
     lines += [
         "",
         "<i>How it is calculated: each signal is ONE trade with partial exits "
-        "(TP1/TP2/TP3 are milestones, not separate wins). A signal is a win if its "
-        "realised R incl. partials is &gt; 0. Win rate = wins ÷ resolved trades "
-        "(cancelled and open signals excluded). R = multiples of the initial risk.</i>",
+        "(TP1/TP2/TP3 are milestones, not separate wins). Today's activity counts events by "
+        "the time they happened; realised R today = the part of each trade closed today "
+        "(e.g. 50% at TP1 = +0.50R). A signal is a win if its realised R incl. partials is "
+        "&gt; 0; win rate = wins ÷ resolved trades (cancelled and open signals excluded). "
+        "R = multiples of the initial risk.</i>",
     ]
     return "\n".join(lines)
 

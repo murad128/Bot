@@ -168,3 +168,149 @@ def text_summary(s: Stats, title: str = "Performance") -> str:
         f"  Avg planned RR: 1:{s.avg_planned_rr:.2f}  Avg win: {s.avg_win_r:+.2f}R  Avg loss: {s.avg_loss_r:+.2f}R",
     ]
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Event-based daily activity (TP milestones and realised R by EVENT time)
+# ---------------------------------------------------------------------------
+# A signal is one trade with partial exits. Its events (stored in the
+# `events` JSON column with their own UTC timestamps) are:
+#   TP1_HIT / TP2_HIT            partial exits while the trade stays open
+#   TP3_HIT | SL_HIT | BE_HIT | EXPIRED | CANCELLED   the final exit
+# Realised R of an event:
+#   partial exit : close_fraction[k] x R at the TP price
+#   final exit   : stored realized_r - partial R already counted
+# so the R of a trade's events always adds up to its stored realized_r
+# (including costs). Each event kind is counted at most once per signal.
+
+FINAL_KINDS = ("TP3_HIT", "SL_HIT", "BE_HIT", "EXPIRED", "CANCELLED")
+
+
+@dataclass
+class TradeEventR:
+    signal_id: Any
+    symbol: str
+    direction: str
+    kind: str
+    time: Any            # aware UTC datetime
+    exit_r: float        # R multiple of the exit price (what the Telegram event shows)
+    realized_r: float    # R actually realised by this event (fraction-weighted)
+    after_tp: bool       # a TP was hit before this event
+
+
+def _parse_time(value):
+    from datetime import datetime, timezone
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+def event_contributions(rec: Any, close_fractions: List[float]) -> List[TradeEventR]:
+    """Realised R per event of one signal, in time order, duplicates removed."""
+    raw = list(_get(rec, "events", []) or [])
+    seen, events = set(), []
+    for e in raw:
+        kind = e.get("kind")
+        if not kind or kind in seen:          # duplicate protection: one event per kind per signal
+            continue
+        if kind in FINAL_KINDS and any(k in FINAL_KINDS for k in seen):
+            continue                          # a trade has exactly one final exit
+        seen.add(kind)
+        events.append(e)
+    events.sort(key=lambda e: _parse_time(e["time"]))
+    is_closed = _get(rec, "outcome") not in (None, "OPEN")
+    out: List[TradeEventR] = []
+    partial_sum = 0.0
+    tp_seen = False
+    for e in events:
+        kind = e["kind"]
+        exit_r = float(e.get("r", 0.0) or 0.0)
+        final = kind in FINAL_KINDS
+        if not final and kind.startswith("TP") and kind.endswith("_HIT"):
+            k = int(kind[2]) - 1
+            frac = close_fractions[k] if 0 <= k < len(close_fractions) else 0.0
+            realized = frac * exit_r
+            partial_sum += realized
+        elif final and is_closed:
+            realized = float(_get(rec, "realized_r", 0.0) or 0.0) - partial_sum
+        else:
+            realized = 0.0
+        out.append(TradeEventR(_get(rec, "id"), _get(rec, "symbol"), _get(rec, "direction"), kind,
+                               _parse_time(e["time"]), exit_r, realized, tp_seen))
+        if kind.startswith("TP"):
+            tp_seen = True
+    return out
+
+
+@dataclass
+class DayActivity:
+    tp1: int = 0
+    tp2: int = 0
+    tp3: int = 0
+    sl_before_tp1: int = 0       # full stop-outs (no TP reached)
+    breakeven_stops: int = 0     # stopped at entry after TP1
+    trailed_stops: int = 0       # stopped at a trailed level after TP2
+    expired: int = 0
+    cancelled: int = 0
+    realized_r: float = 0.0      # all R realised by events inside the day, incl. partial exits
+    events: List[TradeEventR] = field(default_factory=list)
+
+
+def day_activity(records: Iterable[Any], start, end, close_fractions: List[float]) -> DayActivity:
+    """Events with start <= time < end (UTC). Each signal is processed once."""
+    a = DayActivity()
+    seen_ids = set()
+    for rec in records:
+        sid = _get(rec, "id")
+        if sid in seen_ids:
+            continue
+        seen_ids.add(sid)
+        for ev in event_contributions(rec, close_fractions):
+            if not (start <= ev.time < end):
+                continue
+            a.events.append(ev)
+            a.realized_r += ev.realized_r
+            if ev.kind == "TP1_HIT":
+                a.tp1 += 1
+            elif ev.kind == "TP2_HIT":
+                a.tp2 += 1
+            elif ev.kind == "TP3_HIT":
+                a.tp3 += 1
+            elif ev.kind == "SL_HIT":
+                if ev.after_tp:
+                    a.trailed_stops += 1
+                else:
+                    a.sl_before_tp1 += 1
+            elif ev.kind == "BE_HIT":
+                a.breakeven_stops += 1
+            elif ev.kind == "EXPIRED":
+                a.expired += 1
+            elif ev.kind == "CANCELLED":
+                a.cancelled += 1
+    a.events.sort(key=lambda e: e.time)
+    a.realized_r = round(a.realized_r, 4)
+    return a
+
+
+@dataclass
+class OpenTrade:
+    signal_id: Any
+    symbol: str
+    direction: str
+    tp_hits: int
+    realized_r: float
+    stop_at_entry: bool
+
+
+def open_trades(records: Iterable[Any]) -> List[OpenTrade]:
+    out = []
+    for r in records:
+        if _get(r, "outcome") != "OPEN":
+            continue
+        entry, sl = _get(r, "entry"), _get(r, "current_sl")
+        at_entry = entry is not None and sl is not None and abs(float(entry) - float(sl)) < 1e-9
+        out.append(OpenTrade(_get(r, "id"), _get(r, "symbol"), _get(r, "direction"),
+                             int(_get(r, "tp_hits", 0) or 0), float(_get(r, "realized_r", 0.0) or 0.0), at_entry))
+    return out

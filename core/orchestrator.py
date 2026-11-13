@@ -27,7 +27,8 @@ from config import BASE_DIR, Config
 from core.domain import Direction, Timeframe
 from core.fundamental_analysis import FundamentalAnalyzer
 from core.market_data import DataProvider, MarketDataService
-from core.performance_analyzer import best_of, breakdown, compute_stats, fmt_pct
+from core.performance_analyzer import (best_of, breakdown, compute_stats, day_activity, fmt_pct,
+                                       open_trades)
 from core.risk_management import RiskManager
 from core.sessions import is_fx_market_open, session_label
 from core.signal_engine import MarketContext, SignalEngine, prepare_frame
@@ -309,9 +310,12 @@ class SignalBot:
         by_symbol = breakdown(closed, "symbol")
         by_session = breakdown(closed, "session_bucket")
         all_time = compute_stats(self.db.all_closed())
+        # TP milestones and realised R by EVENT time (open trades included), read-only
+        activity = day_activity(self.db.active_between(start, end), start, end, self.cfg.risk.tp_close_fractions)
+        opens = open_trades(self.db.open_signals())
         return tm.daily_report_message(start.date().isoformat(), compute_stats(created), compute_stats(closed),
                                        by_symbol, by_session, best_of(by_symbol), best_of(by_session),
-                                       len(self.db.open_signals()), all_time)
+                                       len(opens), all_time, activity=activity, open_list=opens)
 
     def send_daily_report(self, now: datetime) -> None:
         text = self.build_daily_report(now)

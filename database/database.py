@@ -102,6 +102,19 @@ class Database:
                  .order_by(SignalRecord.closed_at))
             return list(s.scalars(q))
 
+    def active_between(self, start: datetime, end: datetime, source: str = "live") -> List[SignalRecord]:
+        """
+        Read-only: signals that were open at some point in [start, end) - created
+        before `end` and not closed before `start`. Used by the daily report to
+        find TP/SL events by their own timestamps (an open signal can hit TP1 today).
+        """
+        with self.session() as s:
+            q = (select(SignalRecord)
+                 .where(SignalRecord.source == source, SignalRecord.created_at < end,
+                        (SignalRecord.closed_at.is_(None)) | (SignalRecord.closed_at >= start))
+                 .order_by(SignalRecord.created_at, SignalRecord.id))
+            return list(s.scalars(q))
+
     def all_closed(self, source: str = "live", limit: int = 5000) -> List[SignalRecord]:
         with self.session() as s:
             q = (select(SignalRecord).where(SignalRecord.source == source, SignalRecord.outcome != "OPEN")
