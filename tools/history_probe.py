@@ -29,8 +29,19 @@ How bars are measured
 Status per symbol/timeframe
   OK              bars returned
   NO BARS         the request succeeded but the terminal has zero bars
-  UNAVAILABLE     the request failed (MT5 error code shown)
+  UNAVAILABLE     the first request failed (MT5 error code or the exact
+                  TypeError message and argument types are shown)
+  INCOMPLETE      paging stopped on an error after some bars were read;
+                  the bars counted so far are shown
   NOT FOUND       the symbol does not exist at the broker
+
+MetaTrader5 call contract (package 5.0.x, compiled module):
+  copy_rates_from_pos(symbol, timeframe, start_pos, count) - positional only,
+  symbol: str, timeframe/start_pos/count: built-in int. Arguments are
+  converted to exactly these types before every call. Paging continues until
+  the terminal returns no data (a short batch does not end paging), and bars
+  are de-duplicated by timestamp, because a new bar forming during paging
+  shifts every position by one.
 
 Missing intervals (gaps longer than one bar) are classified using the broker
 server clock (Vantage: New York time + 7h, so the trading week runs Monday
@@ -141,15 +152,41 @@ def _last_error(mt5) -> Tuple[Optional[int], str]:
         return None, str(exc)
 
 
+class _RatesCallError(Exception):
+    """copy_rates_from_pos raised (e.g. TypeError from the compiled MT5 module)."""
+
+
+def fetch_rates(mt5, broker_symbol, tf, pos, count):
+    """
+    One copy_rates_from_pos call with exactly the argument types the compiled
+    MetaTrader5 module accepts: (str, int, int, int), positional. Raises
+    _RatesCallError with the exception text and the argument types if the
+    package rejects the call, so the report shows the real cause.
+    """
+    args = (str(broker_symbol), int(tf), int(pos), int(count))
+    if args[2] < 0 or args[3] < 1:
+        raise _RatesCallError(f"invalid paging values start_pos={args[2]} count={args[3]}")
+    try:
+        return mt5.copy_rates_from_pos(*args)
+    except TypeError as exc:
+        types = ", ".join(type(a).__name__ for a in (broker_symbol, tf, pos, count))
+        raise _RatesCallError(f"TypeError: {exc} (argument types: {types})") from exc
+
+
 def probe_one(mt5, broker_symbol: str, symbol: str, tf_name: str, chunk: int, max_bars: int) -> ProbeResult:
     res = ProbeResult(symbol, tf_name, "OK", broker_symbol=broker_symbol)
     tf = getattr(mt5, f"TIMEFRAME_{tf_name}")
     step = TF_SECONDS[tf_name]
     pos = 0
-    newer_first: Optional[int] = None            # first bar time of the previously read (newer) chunk
+    newer_first: Optional[int] = None            # oldest bar time already counted (from newer chunks)
     all_gaps: List[Gap] = []
     while True:
-        rates = mt5.copy_rates_from_pos(broker_symbol, tf, pos, chunk)
+        try:
+            rates = fetch_rates(mt5, broker_symbol, tf, pos, chunk)
+        except _RatesCallError as exc:
+            res.error = str(exc)
+            res.status = "UNAVAILABLE" if res.bars == 0 else "INCOMPLETE"
+            break
         if rates is None:
             code, msg = _last_error(mt5)
             if pos == 0 and code not in MT5_SUCCESS_CODES:
@@ -161,7 +198,14 @@ def probe_one(mt5, broker_symbol: str, symbol: str, tf_name: str, chunk: int, ma
             break
         times = np.asarray(rates["time"], dtype=np.int64)
         spreads = np.asarray(rates["spread"]) if "spread" in rates.dtype.names else np.zeros(n)
-        res.bars += n
+        if newer_first is not None:
+            # a bar formed while paging shifts positions by one: drop bars already counted
+            keep = times < newer_first
+            times, spreads = times[keep], spreads[keep]
+        pos += n                                  # advance by what the terminal returned
+        if len(times) == 0:
+            continue
+        res.bars += len(times)
         res.with_spread += int((spreads > 0).sum())
         if res.last is None:
             res.last = int(times[-1])
@@ -170,13 +214,10 @@ def probe_one(mt5, broker_symbol: str, symbol: str, tf_name: str, chunk: int, ma
         if newer_first is not None:               # gap across the chunk boundary
             all_gaps.extend(classify_gaps(np.array([times[-1], newer_first]), step))
         newer_first = int(times[0])
-        pos += n
-        if n < chunk:
-            break
         if res.bars >= max_bars:
             res.capped = True
             break
-    if res.bars == 0:
+    if res.bars == 0 and res.status == "OK":
         res.status = "NO BARS"
         return res
     for g in all_gaps:
@@ -253,23 +294,25 @@ def format_report(code: int, header: dict, results: List[ProbeResult]) -> str:
         if r.status == "NOT FOUND":
             lines.append(f"| {r.symbol} | - | NOT FOUND | - | - | - | - | - | - |")
             continue
-        if r.status != "OK":
+        if r.status in ("NO BARS", "UNAVAILABLE"):
             detail = r.error or "request succeeded, 0 bars"
             lines.append(f"| {r.symbol} | {r.timeframe} | {r.status} | - | - | 0 | - | - | {detail} |")
             continue
         cov = f"{r.spread_coverage:.0%}" if r.spread_coverage is not None else "-"
         g = r.gaps
         bars = f"{r.bars:,}" + (" (capped)" if r.capped else "")
-        lines.append(f"| {r.symbol} | {r.timeframe} | OK | {_d(r.first)} | {_d(r.last)} | {bars} | {_span_days(r)} | "
-                     f"{cov} | {g['weekend']}/{g['daily_break']}/{g['unexpected']} |")
-    unexpected = [(r, gap) for r in results if r.status == "OK" for gap in r.largest_unexpected]
+        lines.append(f"| {r.symbol} | {r.timeframe} | {r.status} | {_d(r.first)} | {_d(r.last)} | {bars} | "
+                     f"{_span_days(r)} | {cov} | {g['weekend']}/{g['daily_break']}/{g['unexpected']}"
+                     + (f" - stopped: {r.error}" if r.status == "INCOMPLETE" else "") + " |")
+    unexpected = [(r, gap) for r in results if r.status in ("OK", "INCOMPLETE") for gap in r.largest_unexpected]
     if unexpected:
         lines += ["", "Largest unexpected gaps (check against market holidays):"]
         for r, gap in sorted(unexpected, key=lambda x: x[1].missing_seconds, reverse=True)[:10]:
             lines.append(f"- {r.symbol} {r.timeframe}: {_d(gap.start)} -> {_d(gap.end)} "
                          f"({gap.missing_seconds / 3600:,.1f} h)")
     n_ok = sum(r.status == "OK" for r in results)
-    lines += ["", f"Summary: {n_ok} OK, {sum(r.status == 'NO BARS' for r in results)} no bars, "
+    lines += ["", f"Summary: {n_ok} OK, {sum(r.status == 'INCOMPLETE' for r in results)} incomplete, "
+                  f"{sum(r.status == 'NO BARS' for r in results)} no bars, "
                   f"{sum(r.status == 'UNAVAILABLE' for r in results)} unavailable, "
                   f"{sum(r.status == 'NOT FOUND' for r in results)} symbols not found.",
               "If first bars look recent: set MT5 Tools > Options > Charts > Max bars in chart = Unlimited and re-run."]

@@ -122,7 +122,8 @@ def test_exact_counts_dates_and_spread_coverage(cfg_probe):
     assert r.first == int(m5["time"][0]) and r.last == int(m5["time"][-1])
     assert r.spread_coverage == pytest.approx(0.75, abs=0.001)
     assert r.gaps["weekend"] == 4 and r.gaps["daily_break"] == 25 - 5 and r.gaps["unexpected"] == 0
-    assert mock.calls["rates"] == len(m5) // 1000 + 1 + (1 if len(m5) % 1000 == 0 else 0)
+    # every batch is read, then one more call confirms the end (a short batch does not end paging)
+    assert mock.calls["rates"] == -(-len(m5) // 1000) + 1
 
 
 def test_weekend_and_daily_break_are_expected_for_every_timeframe(cfg_probe):
@@ -242,3 +243,117 @@ def test_classify_gaps_rules(a, b, step, kind):
 def test_contiguous_bars_have_no_gaps():
     t = np.arange(epoch("2026-10-13 10:00"), epoch("2026-10-13 12:00"), 300)
     assert hp.classify_gaps(t, 300) == []
+
+
+# ----------------------------------------------------------------------------- regression: TypeError / paging
+class StrictMockMT5(MockMT5):
+    """Mimics the compiled MetaTrader5 module (5.0.6231): positional only, exact built-in types.
+    The error texts are the ones embedded in MetaTrader5/_core.pyd."""
+
+    def __init__(self, *a, max_per_call=None, raise_type_error_at=None, new_bar_after_first_call=False, **kw):
+        super().__init__(*a, **kw)
+        self.max_per_call = max_per_call
+        self.raise_type_error_at = raise_type_error_at      # start_pos at which the package raises
+        self.new_bar_after_first_call = new_bar_after_first_call
+        self.requests = []
+
+    def copy_rates_from_pos(self, *args, **kwargs):
+        if kwargs:
+            raise TypeError("Unnamed arguments not allowed")
+        if len(args) != 4:
+            raise TypeError("Invalid number of arguments")
+        symbol, tf, start, count = args
+        if type(symbol) is not str:
+            raise TypeError("Invalid 1st unnamed argument")
+        if type(tf) is not int:
+            raise TypeError("Invalid 2nd unnamed argument")
+        if type(start) is not int:
+            raise TypeError("Invalid 3rd unnamed argument")
+        if type(count) is not int:
+            raise TypeError("Invalid arguments")
+        if self.raise_type_error_at is not None and start >= self.raise_type_error_at:
+            raise TypeError("Invalid 3rd unnamed argument")
+        self.requests.append((start, count))
+        out = super().copy_rates_from_pos(symbol, tf, start, count if not self.max_per_call
+                                          else min(count, self.max_per_call))
+        if self.new_bar_after_first_call and len(self.requests) == 1:
+            key = (symbol, tf)
+            arr = self.data[key]
+            new = arr[-1:].copy()
+            new["time"] = arr["time"][-1] + 300          # a new bar forms: every position shifts by one
+            self.data[key] = np.concatenate([arr, new])
+        return out
+
+
+def test_numpy_integer_arguments_are_converted_before_the_call(cfg_probe):
+    """numpy integers are not accepted by the compiled module's strict checks -> converted to int first."""
+    m5 = server_bars("2026-10-05", "2026-10-17", 300)
+    mock = StrictMockMT5({("XAUUSD", 5): m5})
+    code, _, res = _run(cfg_probe, mock, symbols=["XAUUSD"], timeframes=["M5"],
+                        chunk=np.int64(1000), max_bars=np.int64(10_000_000))
+    assert code == 0 and res[0].status == "OK" and res[0].bars == len(m5)
+    assert all(type(s) is int and type(c) is int for s, c in mock.requests)
+
+
+def test_strict_mock_rejects_wrong_types_like_the_real_package():
+    mock = StrictMockMT5({("XAUUSD", 5): server_bars("2026-10-05", "2026-10-06", 300)})
+    with pytest.raises(TypeError, match="Invalid 3rd unnamed argument"):
+        mock.copy_rates_from_pos("XAUUSD", 5, np.int64(0), 10)
+    with pytest.raises(TypeError, match="Unnamed arguments not allowed"):
+        mock.copy_rates_from_pos("XAUUSD", 5, 0, count=10)
+
+
+def test_type_error_is_reported_not_raised_and_other_timeframes_continue(cfg_probe):
+    data = {("XAUUSD", 5): server_bars("2026-10-05", "2026-10-10", 300),
+            ("XAUUSD", 16385): server_bars("2026-10-05", "2026-10-10", 3600)}
+    mock = StrictMockMT5(data, raise_type_error_at=0)                  # the package rejects every call
+    code, header, res = _run(cfg_probe, mock, symbols=["XAUUSD"], timeframes=["M5", "H1"])
+    assert code == 0 and [r.status for r in res] == ["UNAVAILABLE", "UNAVAILABLE"]
+    assert "TypeError: Invalid 3rd unnamed argument" in res[0].error
+    assert "argument types: str, int, int, int" in res[0].error
+    text = hp.format_report(code, header, res)
+    assert "| XAUUSD | M5 | UNAVAILABLE |" in text and "Invalid 3rd unnamed argument" in text
+
+
+def test_type_error_mid_paging_reports_incomplete_with_bars_so_far(cfg_probe):
+    m5 = server_bars("2026-10-05", "2026-10-17", 300)
+    mock = StrictMockMT5({("XAUUSD", 5): m5}, raise_type_error_at=2000)
+    _, header, res = _run(cfg_probe, mock, symbols=["XAUUSD"], timeframes=["M5"], chunk=1000)
+    r = res[0]
+    assert r.status == "INCOMPLETE" and r.bars == 2000 and "TypeError" in r.error
+    assert r.last == int(m5["time"][-1]) and r.first == int(m5["time"][-2000])
+    assert "| XAUUSD | M5 | INCOMPLETE |" in hp.format_report(0, header, res)
+
+
+@pytest.mark.parametrize("max_per_call", [999, 300, 1])
+def test_short_batches_do_not_end_paging(cfg_probe, max_per_call):
+    """A terminal returning fewer bars than requested must not hide older history."""
+    m5 = server_bars("2026-10-05", "2026-10-09", 300)
+    mock = StrictMockMT5({("XAUUSD", 5): m5}, max_per_call=max_per_call)
+    _, _, res = _run(cfg_probe, mock, symbols=["XAUUSD"], timeframes=["M5"], chunk=1000)
+    r = res[0]
+    assert r.status == "OK" and r.bars == len(m5)
+    assert r.first == int(m5["time"][0]) and r.last == int(m5["time"][-1])
+    starts = [s for s, _ in mock.requests]
+    assert starts == sorted(set(starts)) and starts[0] == 0                # every position requested once, in order
+
+
+def test_new_bar_during_paging_is_not_double_counted(cfg_probe):
+    m5 = server_bars("2026-10-05", "2026-10-09", 300)
+    original = len(m5)
+    mock = StrictMockMT5({("XAUUSD", 5): m5}, new_bar_after_first_call=True)
+    _, _, res = _run(cfg_probe, mock, symbols=["XAUUSD"], timeframes=["M5"], chunk=100)
+    r = res[0]
+    assert r.bars == original                      # the boundary bar is not counted twice
+    assert r.first == int(m5["time"][0])
+    assert r.gaps["unexpected"] == 0
+
+
+def test_paging_counts_every_bar_exactly_once_across_many_chunks(cfg_probe):
+    m5 = server_bars("2026-09-07", "2026-11-07", 300, holes=[("2026-10-14 10:00", "2026-10-14 16:00")])
+    for chunk in (7, 1000, 100_000):
+        mock = StrictMockMT5({("XAUUSD", 5): m5})
+        _, _, res = _run(cfg_probe, mock, symbols=["XAUUSD"], timeframes=["M5"], chunk=chunk)
+        r = res[0]
+        assert r.bars == len(m5) and r.gaps["unexpected"] == 1, chunk
+        assert r.first == int(m5["time"][0]) and r.last == int(m5["time"][-1]), chunk
