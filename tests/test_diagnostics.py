@@ -190,24 +190,66 @@ def test_staleness_policy_tolerates_one_late_bar(missing_bars, stale, monkeypatc
     assert d.is_history_stale(now, now, Timeframe.H1) is stale
 
 
-def test_diagnostic_flags_missing_recent_bars_and_internal_gaps(cfg, tmp_path):
-    """End to end: remove recent bars and a mid-history block from the broker data -> FAIL / gaps reported."""
+# Frozen "now" values: weekdays, just after the Sunday open, near the Friday close, a Saturday,
+# the daily-break hour, and both DST regimes. The result must not depend on when the test runs.
+FROZEN_NOWS = [
+    "2026-11-11 12:00",   # Wednesday, winter (UTC+2 server)
+    "2026-11-09 00:30",   # Monday just after the Sunday open, winter
+    "2026-11-13 21:30",   # Friday 30 min before the weekly close, winter
+    "2026-11-14 12:00",   # Saturday, market closed
+    "2026-11-15 22:30",   # Sunday, inside the daily break after the open
+    "2026-07-15 12:00",   # Wednesday, summer (UTC+3 server)
+    "2026-07-17 20:30",   # Friday 30 min before the weekly close, summer
+]
+
+
+@pytest.mark.parametrize("frozen", FROZEN_NOWS)
+def test_diagnostic_flags_missing_recent_bars_and_internal_gaps(cfg, tmp_path, monkeypatch, frozen):
+    """End to end: remove the latest bars and a fixed mid-week block from the broker data.
+
+    Deterministic: the clock inside core.diagnostics is frozen, the simulated broker data ends at
+    that moment, and the hole is placed on a fixed weekday/time (never next to a weekend), so the
+    expected result is exact for every frozen moment."""
     from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+    import pandas as pd
+    import core.diagnostics as diag
     from integrations.telegram_bot import TelegramNotifier
+    from tests.fake_vantage import to_server
+
+    now = pd.Timestamp(frozen, tz="UTC").to_pydatetime()
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now if tz is not None else now.replace(tzinfo=None)
+
+    monkeypatch.setattr(diag, "datetime", FrozenDatetime)
+
     cfg = _cfg(cfg, tmp_path)
     cfg.instruments = {"XAUUSD": cfg.instrument("XAUUSD")}
-    now = datetime.now(timezone.utc)
-    fake = FakeVantageMT5(days=40)
-    fake.symbol_info_tick = (lambda n: __import__("types").SimpleNamespace(       # fresh tick: market "open"
-        time=int(__import__("tests.fake_vantage", fromlist=["to_server"]).to_server(
-            __import__("pandas").DatetimeIndex([now])).as_unit("s").asi8[0]), bid=2650.0, ask=2650.25))
-    m5 = fake._tf_bars(5)
-    gap_start = m5.index[len(m5) // 2]
-    holes = (m5.index >= gap_start) & (m5.index < gap_start + timedelta(hours=6))   # 6h hole mid-history
-    fake._bars[5] = m5[~holes].iloc[:-36]                                            # and the last 3h missing
+    fake = FakeVantageMT5(days=40, end=now)
+    fresh = int(to_server(pd.DatetimeIndex([now])).as_unit("s").asi8[0])
+    fake.symbol_info_tick = lambda n: SimpleNamespace(time=fresh, bid=2650.0, ask=2650.25)   # market "open"
+
+    m5 = fake._tf_bars(5)                                   # server clock (naive), NY + 7h
+    # Fixed hole: the last Wednesday 10:00 server time that is at least 2 days before the data end
+    weds = m5.index[(m5.index.dayofweek == 2) & (m5.index.hour == 10) & (m5.index.minute == 0)
+                    & (m5.index <= m5.index[-1] - timedelta(days=2))]
+    hole_server = weds[-1]
+    holes = (m5.index >= hole_server) & (m5.index < hole_server + timedelta(hours=6))
+    fake._bars[5] = m5[~holes].iloc[:-36]                   # 6h hole + the latest 3h missing
+
     rep = run_diagnostics(cfg, provider=MT5DataProvider(cfg.mt5, mt5_module=fake),
-                          notifier=TelegramNotifier(cfg.telegram, session=FakeSession([])), days=30, run_engine=False)
+                          notifier=TelegramNotifier(cfg.telegram, session=FakeSession([])), days=30,
+                          run_engine=False)
     st = {c.component: (c.status, c.detail) for c in rep.checks}
+
+    # the latest 3h are missing while the tick is fresh -> stale history
     assert st["History M5"][0] == "FAIL", st["History M5"]
-    assert "1 unexpected gaps" in st["History M5"][1] or "unexpected gaps" in st["History M5"][1]
-    assert "unexpected gaps (M5)" in rep.to_markdown()
+    # exactly ONE unexpected gap, and it is the hole (expressed in UTC)
+    assert ", 1 unexpected gaps," in st["History M5"][1], st["History M5"]
+    hole_utc = (pd.DatetimeIndex([hole_server]) - pd.Timedelta(hours=7)).tz_localize("America/New_York") \
+        .tz_convert("UTC")[0]
+    md = rep.to_markdown()
+    assert f"unexpected gaps (M5): {hole_utc:%m-%d %H:%M}->" in md, md
