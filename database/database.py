@@ -49,7 +49,10 @@ class Database:
                 cur.execute("PRAGMA synchronous=NORMAL")
                 cur.close()
         self.Session = sessionmaker(self.engine, expire_on_commit=False)
+        import database.learning_models  # noqa: F401  (registers the NEW learning tables; existing ones unchanged)
         Base.metadata.create_all(self.engine)
+        from core.learning.schema import ensure_learning_schema
+        ensure_learning_schema(self.Session)
 
     @contextmanager
     def session(self) -> Iterator[Session]:

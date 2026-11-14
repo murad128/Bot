@@ -100,6 +100,7 @@ class SignalBot:
             self._stop.wait(60)
         if self._stop.is_set():
             return
+        self._record_settings()                      # learning capture: isolated, never affects signals
         self._register_commands()
         self.notifier.start_polling()
         self.notifier.send(tm.system_message("ok", f"Signal bot started. Monitoring: {', '.join(self.cfg.active_symbols)}"),
@@ -125,6 +126,25 @@ class SignalBot:
         self.provider.shutdown()
         log.info("Shutdown complete")
 
+    # ------------------------------------------------------------------ learning capture (L1.1a)
+    def _record_settings(self) -> Optional[str]:
+        """Store the settings fingerprint once at start-up. Errors are logged only (no alert, no effect)."""
+        try:
+            from core.learning.fingerprint import record_settings
+            self.settings_fingerprint = record_settings(self.db, self.cfg)
+            return self.settings_fingerprint
+        except Exception as exc:
+            log.warning("Learning capture: settings fingerprint not recorded: %s", exc)
+            return None
+
+    def _archive_calendar(self, now: datetime) -> None:
+        """Archive the events of a SUCCESSFUL calendar refresh. Errors are logged only."""
+        try:
+            from core.learning.calendar_archive import archive_events
+            archive_events(self.db, self.calendar.events, now)
+        except Exception as exc:
+            log.warning("Learning capture: calendar archive failed: %s", exc)
+
     # ------------------------------------------------------------------ alerts
     def alert(self, kind: str, level: str, text: str) -> None:
         """System alert, rate-limited per kind."""
@@ -144,7 +164,8 @@ class SignalBot:
         if not self.market.ensure_connected():
             self.alert("disconnected", "error", f"Data provider '{self.provider.name}' disconnected; reconnect failed.")
             return
-        self.calendar.refresh_if_needed(now)
+        if self.calendar.refresh_if_needed(now):
+            self._archive_calendar(now)              # learning capture: isolated, never affects signals
         if not self.calendar.available and self.cfg.news.calendar_provider != "none":
             self.alert("calendar", "warning", f"Economic calendar unavailable ({self.calendar.last_error}). "
                        + ("New signals are blocked until it recovers." if self.fund.block_if_unavailable
