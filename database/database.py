@@ -211,20 +211,16 @@ class Database:
 
     # ------------------------------------------------------------------ maintenance
     def backup(self, backup_dir: str, keep: int = 14) -> Optional[Path]:
-        """Online, consistent SQLite backup with rotation. No-op for other engines."""
+        """
+        Online, consistent SQLite backup: verified (integrity + record counts),
+        gzip-compressed and checked against the uncompressed copy, with a
+        manifest and rotation. See database/backup.py. No-op for other engines.
+        """
         if not self.url.startswith("sqlite:///"):
             log.info("Backup skipped: use pg_dump for non-SQLite databases")
             return None
         src = Path(self.url.replace("sqlite:///", ""))
         if not src.exists():
             return None
-        out_dir = Path(backup_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        dest = out_dir / f"{src.stem}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}.db"
-        with sqlite3.connect(src) as con, sqlite3.connect(dest) as bak:
-            con.backup(bak)
-        backups = sorted(out_dir.glob(f"{src.stem}_*.db"))
-        for old in backups[:-keep]:
-            old.unlink(missing_ok=True)
-        log.info("Database backup written to %s", dest)
-        return dest
+        from database.backup import create_backup
+        return create_backup(str(src), backup_dir, keep=keep).path

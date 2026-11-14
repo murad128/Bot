@@ -13,6 +13,8 @@ Forex & Gold signal bot - command line entry point.
   python main.py review                   trade review -> recommendations (pending approval)
   python main.py recommendations [--approve ID | --reject ID]
   python main.py test-telegram            send a test message
+  python main.py backup [--list]          verified, compressed database backup
+  python main.py restore --from F --to T  verify and restore a backup into a separate file
 
 SIGNAL-ONLY: no command places orders.
 """
@@ -297,6 +299,69 @@ def cmd_recommendations(cfg, args):
     return 0
 
 
+def _sqlite_path(cfg) -> Path:
+    if not cfg.database_url.startswith("sqlite:///"):
+        raise SystemExit("backup/restore commands support SQLite only (use pg_dump/pg_restore for PostgreSQL)")
+    return Path(cfg.database_url.replace("sqlite:///", ""))
+
+
+def cmd_backup(cfg, args):
+    from database.backup import create_backup, list_backups, read_manifest
+    db_path = _sqlite_path(cfg)
+    if args.list:
+        items = list_backups(cfg.runtime.backup_dir, db_path.stem)
+        if not items:
+            print(f"No backups in {cfg.runtime.backup_dir}")
+        for p in items:
+            m = read_manifest(p) or {}
+            rows = sum((m.get("counts") or {}).values()) if m else "?"
+            print(f"{p.name:44} {p.stat().st_size:>12,} B  rows={rows}  manifest={'yes' if m else 'no'}")
+        return 0
+    r = create_backup(str(db_path), cfg.runtime.backup_dir, keep=cfg.runtime.backup_keep)
+    print(f"Backup: {r.path}")
+    print(f"  integrity: {r.integrity} | rows: {sum(r.counts.values()):,} in {len(r.counts)} tables")
+    print(f"  size: {r.db_bytes:,} B -> {r.stored_bytes:,} B ({r.ratio:.1f}x, {'compressed' if r.compressed else 'UNCOMPRESSED'})")
+    for w in r.warnings:
+        print("  warning:", w)
+    return 0
+
+
+def cmd_restore(cfg, args):
+    from database.backup import BackupError, restore_backup, verify_backup
+    live = _sqlite_path(cfg)
+    try:
+        if args.verify_only:
+            v = verify_backup(args.source)
+            print(f"OK: {args.source} | integrity {v['integrity']} | rows {sum(v['counts'].values()):,} | "
+                  f"manifest {'matched' if v['manifest'] else 'NOT FOUND'}")
+            if not v["manifest"]:
+                print("WARNING: no manifest - checksum and record counts could not be verified; "
+                      "restoring it requires --allow-no-manifest")
+            for t, n in v["counts"].items():
+                print(f"  {t:20} {n:>10,}")
+            return 0
+        if not args.target:
+            print("--to is required (or use --verify-only)")
+            return 2
+        r = restore_backup(args.source, args.target, live_db_path=str(live), overwrite=args.overwrite,
+                           replace_live=args.replace_live, lock_path=str(BASE_DIR / "data" / "bot.lock"),
+                           safety_backup_dir=cfg.runtime.backup_dir, allow_no_manifest=args.allow_no_manifest)
+    except BackupError as exc:
+        print(f"RESTORE REFUSED: {exc}")
+        return 1
+    print(f"Restored {r.source.name} -> {r.target}")
+    print(f"  integrity: {r.integrity} | rows: {sum(r.counts.values()):,}")
+    for t, n in r.counts.items():
+        print(f"  {t:20} {n:>10,}")
+    for w in r.warnings:
+        print(f"  WARNING: {w}")
+    if r.safety_backup:
+        print(f"  previous live database: verified safety backup {r.safety_backup}")
+    if r.pre_restore_copy:
+        print(f"  previous live database file kept as {r.pre_restore_copy} (delete it once you are satisfied)")
+    return 0
+
+
 def cmd_test_telegram(cfg, args):
     from integrations.telegram_bot import TelegramNotifier
     from integrations.telegram_messages import system_message
@@ -346,6 +411,19 @@ def main(argv=None) -> int:
     p = sub.add_parser("recommendations")
     p.add_argument("--approve", type=int)
     p.add_argument("--reject", type=int)
+    p = sub.add_parser("backup", help="verified, compressed SQLite backup (safe while the bot runs)")
+    p.add_argument("--list", action="store_true", help="list existing backups")
+    p = sub.add_parser("restore", help="verify or restore a backup (never touches the live DB by default)")
+    p.add_argument("--from", dest="source", required=True, help="backup file (.db.gz or .db)")
+    p.add_argument("--to", dest="target", help="target database file (must not exist unless --overwrite)")
+    p.add_argument("--verify-only", action="store_true", help="only check the backup, write nothing")
+    p.add_argument("--overwrite", action="store_true",
+                   help="allow overwriting an existing file that is NOT a bot database (bot databases are refused)")
+    p.add_argument("--allow-no-manifest", action="store_true",
+                   help="allow restoring a backup without a manifest (integrity_check only)")
+    p.add_argument("--replace-live", action="store_true",
+                   help="replace the live database: bot stopped, no other connection open, verified safety "
+                        "backup first, automatic rollback on failure")
     sub.add_parser("test-telegram")
     args = ap.parse_args(argv)
     cfg = load_config()
@@ -354,6 +432,7 @@ def main(argv=None) -> int:
         "run": cmd_run, "diagnose": cmd_diagnose, "check": cmd_check, "scan": cmd_scan, "download": cmd_download,
         "backtest": cmd_backtest, "walkforward": cmd_walkforward, "report": cmd_report,
         "review": cmd_review, "recommendations": cmd_recommendations, "test-telegram": cmd_test_telegram,
+        "backup": cmd_backup, "restore": cmd_restore,
     }[args.cmd]
     return handler(cfg, args) or 0
 
