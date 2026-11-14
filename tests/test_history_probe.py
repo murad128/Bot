@@ -151,8 +151,9 @@ def test_cap_is_reported(cfg_probe):
     m5 = server_bars("2026-10-05 00:00", "2026-10-24 00:00", 300)
     _, _, res = _run(cfg_probe, MockMT5({("XAUUSD", 5): m5}), symbols=["XAUUSD"], timeframes=["M5"],
                      chunk=100, max_bars=300)
-    assert res[0].capped and res[0].bars == 300
-    assert "(capped)" in hp.format_report(0, {}, res)
+    assert res[0].status == "LIMITED" and res[0].bars == 300 and "bar limit 300" in res[0].error
+    text = hp.format_report(3, {}, res)
+    assert "| LIMITED |" in text and "**SCAN INCOMPLETE**" in text and "*" in text
 
 
 # ----------------------------------------------------------------------------- unavailable vs zero bars
@@ -173,7 +174,7 @@ def test_unavailable_no_bars_and_not_found_are_distinguished(cfg_probe):
     text = hp.format_report(code, header, res)
     assert "| XAUUSD | M5 | NO BARS |" in text and "request succeeded, 0 bars" in text
     assert "| EURUSD | M5 | UNAVAILABLE |" in text and "| GBPJPY | - | NOT FOUND |" in text
-    assert "1 symbols not found" in text
+    assert "1 not found" in text and "**SCAN INCOMPLETE**" in text        # unavailable rows: not complete
 
 
 # ----------------------------------------------------------------------------- safety
@@ -308,7 +309,7 @@ def test_type_error_is_reported_not_raised_and_other_timeframes_continue(cfg_pro
             ("XAUUSD", 16385): server_bars("2026-10-05", "2026-10-10", 3600)}
     mock = StrictMockMT5(data, raise_type_error_at=0)                  # the package rejects every call
     code, header, res = _run(cfg_probe, mock, symbols=["XAUUSD"], timeframes=["M5", "H1"])
-    assert code == 0 and [r.status for r in res] == ["UNAVAILABLE", "UNAVAILABLE"]
+    assert code == 3 and [r.status for r in res] == ["UNAVAILABLE", "UNAVAILABLE"]   # 3 = incomplete scan
     assert "TypeError: Invalid 3rd unnamed argument" in res[0].error
     assert "argument types: str, int, int, int" in res[0].error
     text = hp.format_report(code, header, res)
@@ -357,3 +358,175 @@ def test_paging_counts_every_bar_exactly_once_across_many_chunks(cfg_probe):
         r = res[0]
         assert r.bars == len(m5) and r.gaps["unexpected"] == 1, chunk
         assert r.first == int(m5["time"][0]) and r.last == int(m5["time"][-1]), chunk
+
+
+# ----------------------------------------------------------------------------- batching, progress, limits
+class FakeClock:
+    """Deterministic clock: TimedMockMT5 advances it by `per_call` seconds per MT5 request."""
+
+    def __init__(self, per_call=1.0):
+        self.t, self.per_call = 0.0, per_call
+
+    def __call__(self):
+        return self.t
+
+
+class TimedMockMT5(StrictMockMT5):
+    def __init__(self, *a, clock=None, interrupt_on_call=None, **kw):
+        super().__init__(*a, **kw)
+        self.clock, self.interrupt_on_call = clock, interrupt_on_call
+
+    def copy_rates_from_pos(self, *args, **kwargs):
+        if self.interrupt_on_call is not None and len(self.requests) + 1 == self.interrupt_on_call:
+            raise KeyboardInterrupt
+        out = super().copy_rates_from_pos(*args, **kwargs)
+        if self.clock is not None:
+            self.clock.t += self.clock.per_call
+        return out
+
+
+def _limits(**kw):
+    kw.setdefault("max_seconds", 0)
+    return hp.Limits(**kw)
+
+
+def test_batches_use_the_configured_chunk_and_stop_exactly_at_the_bar_limit(cfg_probe):
+    m5 = server_bars("2026-10-05", "2026-10-17", 300)
+    mock = StrictMockMT5({("XAUUSD", 5): m5})
+    _, _, res = _run(cfg_probe, mock, symbols=["XAUUSD"], timeframes=["M5"],
+                     limits=_limits(chunk=700, max_bars=2_000))
+    r = res[0]
+    assert [c for _, c in mock.requests] == [700, 700, 600]               # last request trimmed to the limit
+    assert [s for s, _ in mock.requests] == [0, 700, 1400]
+    assert r.status == "LIMITED" and r.bars == 2_000 and r.batches == 3
+    assert r.last == int(m5["time"][-1]) and r.first == int(m5["time"][-2000])
+
+
+def test_default_chunk_and_time_limit_are_practical():
+    assert hp.Limits().chunk == 20_000 and hp.Limits().max_seconds == 300
+
+
+def test_progress_after_every_successful_batch(cfg_probe):
+    m5 = server_bars("2026-10-05", "2026-10-09", 300)
+    clock = FakeClock(per_call=2.0)
+    mock = TimedMockMT5({("XAUUSD", 5): m5}, clock=clock)
+    events = []
+    _, _, res = _run(cfg_probe, mock, symbols=["XAUUSD"], timeframes=["M5"],
+                     limits=_limits(chunk=400), progress=events.append, clock=clock)
+    n = -(-len(m5) // 400)
+    assert len(events) == res[0].batches == n
+    assert [e["added"] for e in events] == [400] * (n - 1) + [len(m5) - 400 * (n - 1)]
+    assert [e["total"] for e in events] == [min(400 * (i + 1), len(m5)) for i in range(n)]
+    assert all(e["symbol"] == "XAUUSD" and e["timeframe"] == "M5" for e in events)
+    assert all(e["batch_seconds"] == pytest.approx(2.0) for e in events)
+    assert [e["elapsed"] for e in events] == pytest.approx([2.0 * (i + 1) for i in range(n)])
+    assert events[-1]["oldest"] == int(m5["time"][0])
+
+
+def test_progress_line_format(capsys):
+    hp.stderr_progress({"symbol": "XAUUSD", "timeframe": "M1", "added": 20000, "total": 140000,
+                        "oldest": epoch("2026-01-05 10:00"), "batch_seconds": 1.25, "elapsed": 63.4})
+    err = capsys.readouterr().err.strip()
+    assert err == "[   63.4s] XAUUSD M1: +20,000 bars (total 140,000, oldest 2026-01-05 10:00) batch 1.2s"
+
+
+def test_time_limit_per_timeframe_marks_limited_with_exact_partial_counts(cfg_probe):
+    m5 = server_bars("2026-10-05", "2026-10-17", 300)
+    clock = FakeClock(per_call=10.0)
+    data = {("XAUUSD", 5): m5, ("XAUUSD", 16385): server_bars("2026-10-05", "2026-10-17", 3600)}
+    code, header, res = _run(cfg_probe, TimedMockMT5(data, clock=clock), symbols=["XAUUSD"],
+                             timeframes=["M5", "H1"], limits=_limits(chunk=500, max_seconds=25), clock=clock)
+    m5r, h1r = res
+    assert m5r.status == "LIMITED" and m5r.bars == 1500 and "time limit 25s" in m5r.error
+    assert m5r.first == int(m5["time"][-1500])          # exactly the newest 1500 bars: none skipped, none doubled
+    assert h1r.status == "OK"                            # the limit applies per timeframe
+    assert code == 3
+    text = hp.format_report(code, header, res)
+    assert "**SCAN INCOMPLETE**" in text and "1 limited" in text
+    assert f"| XAUUSD | M5 | LIMITED | {hp._d(m5r.first)}* |" in text
+
+
+def test_total_time_limit_leaves_remaining_rows_not_scanned(cfg_probe):
+    data = {("XAUUSD", TF_CODE[tf]): server_bars("2026-10-05", "2026-10-09", hp.TF_SECONDS[tf])
+            for tf in ("M5", "M15", "H1")}
+    clock = FakeClock(per_call=6.0)     # M5: data + end check = 12s; M15 starts at 12s, stopped after 18s
+    code, header, res = _run(cfg_probe, TimedMockMT5(data, clock=clock), symbols=["XAUUSD"],
+                             timeframes=["M5", "M15", "H1"],
+                             limits=_limits(chunk=100_000, max_total_seconds=15), clock=clock)
+    assert [r.status for r in res] == ["OK", "LIMITED", "NOT SCANNED"]
+    assert code == 3 and "1 not scanned" in hp.format_report(code, header, res)
+
+
+def test_per_timeframe_bar_limits(cfg_probe):
+    data = {("XAUUSD", 1): server_bars("2026-10-05", "2026-10-07", 60),
+            ("XAUUSD", 16385): server_bars("2026-10-05", "2026-10-07", 3600)}
+    _, _, res = _run(cfg_probe, StrictMockMT5(data), symbols=["XAUUSD"], timeframes=["M1", "H1"],
+                     limits=_limits(chunk=1000, max_bars=10, max_bars_tf={"M1": 1500}))
+    m1, h1 = res
+    assert m1.status == "LIMITED" and m1.bars == 1500          # per-timeframe override
+    assert h1.status == "LIMITED" and h1.bars == 10            # global per symbol/timeframe limit
+    assert hp._parse_tf_limits("m1=200_000, H4=0") == {"M1": 200_000, "H4": 0}
+    for bad in ("M2=5", "M1", "M1=-1"):
+        with pytest.raises(ValueError):
+            hp._parse_tf_limits(bad)
+
+
+def test_ctrl_c_mid_paging_reports_interrupted_and_not_scanned(cfg_probe):
+    data = {("XAUUSD", 5): server_bars("2026-10-05", "2026-10-17", 300),
+            ("XAUUSD", 16385): server_bars("2026-10-05", "2026-10-17", 3600)}
+    code, header, res = _run(cfg_probe, TimedMockMT5(data, interrupt_on_call=4), symbols=["XAUUSD", "EURUSD"],
+                             timeframes=["M5", "H1"], limits=_limits(chunk=500))
+    assert code == 130 and header["interrupted"]
+    assert [r.status for r in res] == ["INTERRUPTED", "NOT SCANNED", "NOT SCANNED", "NOT SCANNED"]
+    r = res[0]
+    assert r.bars == 1500 and r.first == int(data[("XAUUSD", 5)]["time"][-1500])
+    text = hp.format_report(code, header, res)
+    assert "**SCAN INCOMPLETE**" in text and "**SCAN COMPLETE**" not in text
+    assert "| XAUUSD | M5 | INTERRUPTED |" in text and "stopped by Ctrl+C" in text and "3 not scanned" in text
+
+
+def test_ctrl_c_report_is_still_written_by_the_cli(cfg_probe, tmp_path, monkeypatch):
+    mock = TimedMockMT5({("XAUUSD", 5): server_bars("2026-10-05", "2026-10-17", 300)}, interrupt_on_call=2)
+    real = hp.run_probe
+    monkeypatch.setattr(hp, "run_probe", lambda cfg, **kw: real(
+        cfg_probe, provider=MT5DataProvider(cfg_probe.mt5, mt5_module=mock), **kw))
+    out = tmp_path / "partial.md"
+    code = hp.main(["--symbols", "XAUUSD", "--timeframes", "M5", "--chunk", "500", "--quiet", "--out", str(out)])
+    text = out.read_text(encoding="utf-8")
+    assert code == 130 and "INTERRUPTED" in text and "**SCAN INCOMPLETE**" in text
+
+
+def test_terminal_that_re_serves_oldest_bars_does_not_loop_forever(cfg_probe):
+    """Reproduces the never-ending scan: batches that add no new bars must end paging."""
+
+    class ClippingMT5(StrictMockMT5):
+        def copy_rates_from_pos(self, *args, **kwargs):
+            if len(self.requests) > 200:
+                raise AssertionError("probe is looping")
+            symbol, tf, start, count = args
+            self.requests.append((start, count))
+            arr = self.data[(symbol, tf)]
+            hi = max(len(arr) - start, min(count, len(arr)))     # beyond the oldest bar: oldest bars again
+            return arr[max(0, hi - count):hi]
+
+    m5 = server_bars("2026-10-05", "2026-10-09", 300)
+    mock = ClippingMT5({("XAUUSD", 5): m5})
+    code, _, res = _run(cfg_probe, mock, symbols=["XAUUSD"], timeframes=["M5"], limits=_limits(chunk=200))
+    r = res[0]
+    assert r.status == "OK" and r.bars == len(m5) and "repeated" in r.note
+    assert len(mock.requests) == -(-len(m5) // 200) + 3                # the data, then 3 repeats -> stop
+
+
+def test_complete_scan_says_complete_and_exits_zero(cfg_probe):
+    data = {("XAUUSD", 5): server_bars("2026-10-05", "2026-10-09", 300)}
+    code, header, res = _run(cfg_probe, StrictMockMT5(data), symbols=["XAUUSD"], timeframes=["M5"],
+                             limits=_limits(chunk=300))
+    text = hp.format_report(code, header, res)
+    table = text.split("| Note |")[1].split("Summary")[0]
+    assert code == 0 and "**SCAN COMPLETE**" in text and "*" not in table
+
+
+def test_cli_rejects_invalid_limits():
+    for argv in (["--chunk", "0"], ["--max-seconds", "-1"], ["--max-bars-tf", "M9=10"]):
+        with pytest.raises(SystemExit):
+            hp.main(argv)
