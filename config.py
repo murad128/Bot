@@ -14,12 +14,15 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
-try:  # optional dependency
-    from dotenv import load_dotenv
+# FXBOT_NO_DOTENV=1 skips the .env file (set by tests/conftest.py so the test
+# suite never picks up real Telegram / MT5 credentials).
+if os.getenv("FXBOT_NO_DOTENV") != "1":
+    try:  # optional dependency
+        from dotenv import load_dotenv
 
-    load_dotenv(Path(__file__).resolve().parent / ".env")
-except Exception:  # pragma: no cover - dotenv is optional
-    pass
+        load_dotenv(Path(__file__).resolve().parent / ".env")
+    except Exception:  # pragma: no cover - dotenv is optional
+        pass
 
 BASE_DIR = Path(__file__).resolve().parent
 

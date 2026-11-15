@@ -74,3 +74,40 @@ def test_gitignore_excludes_sensitive_paths():
     assert set(paths) == ignored, set(paths) - ignored
     keep = subprocess.run(["git", "check-ignore", "--no-index", ".env.example"], cwd=ROOT, capture_output=True)
     assert keep.returncode == 1          # template must stay tracked
+
+
+def test_suite_is_isolated_from_real_env():
+    """conftest: no .env, no inherited credentials, real MetaTrader5 cannot be imported."""
+    import os
+    import pytest as _pytest
+    from config import TelegramConfig, load_config
+    assert os.environ.get("FXBOT_NO_DOTENV") == "1"
+    assert not any(k.startswith(("TELEGRAM_", "MT5_")) for k in os.environ)
+    assert not TelegramConfig().enabled
+    c = load_config()
+    assert c.mt5.login is None and c.mt5.password is None
+    with _pytest.raises(ImportError):
+        import MetaTrader5  # noqa: F401
+
+
+def test_telegram_network_error_never_logs_token(caplog):
+    """The token is in the request URL; a network error must not expose it (any token format)."""
+    import logging
+    import requests
+    from config import TelegramConfig
+    from integrations.telegram_bot import TelegramNotifier
+    token = "ab:short"                      # not matching the generic pattern, too short to register
+
+    class _Boom:
+        def post(self, url, **kw):
+            raise requests.ConnectionError(f"Max retries exceeded with url: {url}")
+
+    n = TelegramNotifier(TelegramConfig(bot_token=token, chat_id="1", max_retries=2), session=_Boom())
+    with caplog.at_level(logging.DEBUG):
+        assert not n.send("x")
+        try:
+            n.test_connection()
+        except Exception as exc:
+            msg = str(exc)
+    out = caplog.text + msg
+    assert "Max retries" in out and token not in out and "bot***" in out

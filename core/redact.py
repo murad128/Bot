@@ -17,6 +17,7 @@ _SECRETS: List[str] = []
 # generic patterns as a second line of defence (values never configured here)
 _PATTERNS = [
     re.compile(r"(bot)\d{6,12}:[A-Za-z0-9_-]{20,}"),                       # Telegram token in URL
+    re.compile(r"(api\.telegram\.org/(?:file/)?bot)[^/\s'\"]+"),           # any token in a Telegram URL path
     re.compile(r"((?:api_key|token|apikey|password)=)[^&\s'\")]+", re.I),  # secrets in query strings
 ]
 
@@ -35,6 +36,7 @@ def redact(text: str) -> str:
         text = text.replace(s, "***")
     text = _PATTERNS[0].sub(r"\1***", text)
     text = _PATTERNS[1].sub(r"\1***", text)
+    text = _PATTERNS[2].sub(r"\1***", text)
     return text
 
 

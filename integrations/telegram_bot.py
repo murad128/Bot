@@ -55,7 +55,11 @@ class TelegramNotifier:
     # ------------------------------------------------------------------ low level
     def _api(self, method: str, payload: dict, timeout: Optional[int] = None, session=None) -> dict:
         url = API.format(token=self.cfg.bot_token, method=method)
-        resp = (session or self.session).post(url, json=payload, timeout=timeout or self.cfg.timeout_s)
+        try:
+            resp = (session or self.session).post(url, json=payload, timeout=timeout or self.cfg.timeout_s)
+        except requests.RequestException as exc:
+            # the exception text contains the URL (and so the token): re-raise redacted, without the chain
+            raise _Transient(redact(f"{type(exc).__name__}: {exc}")) from None
         try:
             data = resp.json()
         except ValueError:
@@ -93,7 +97,7 @@ class TelegramNotifier:
                         log.warning("Telegram 429, retry after %ss", e.seconds)
                         time.sleep(min(e.seconds, 60))
                     except (_Transient, requests.RequestException) as e:
-                        log.warning("Telegram transient error (%s), retry %d", e, attempt + 1)
+                        log.warning("Telegram transient error (%s), retry %d", redact(str(e)), attempt + 1)
                         time.sleep(delay)
                         delay = min(delay * 2, 30)
                     except _Permanent as e:
@@ -123,7 +127,7 @@ class TelegramNotifier:
         try:
             self._send_raw(text)
         except Exception as exc:
-            log.error("Telegram delivery failed (%s): %s", kind, exc)
+            log.error("Telegram delivery failed (%s): %s", kind, redact(str(exc)))
             if self.db is not None:
                 self.db.outbox_add(kind, text, key, redact(str(exc)))
             return False
@@ -190,9 +194,9 @@ class TelegramNotifier:
                         try:
                             self.send(handler(), kind="command")
                         except Exception as exc:
-                            log.exception("Command %s failed: %s", cmd, exc)
+                            log.error("Command %s failed: %s", cmd, redact(str(exc)))
             except Exception as exc:
-                log.debug("Telegram polling error: %s", exc)
+                log.debug("Telegram polling error: %s", redact(str(exc)))
                 self._stop.wait(10)
 
 

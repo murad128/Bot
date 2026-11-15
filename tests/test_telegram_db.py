@@ -63,10 +63,10 @@ def test_signal_message_contains_required_fields(gold_spec):
 
 
 def test_dedup_and_dry_run(db, tmp_path):
-    n = TelegramNotifier(TelegramConfig(), db, dry_run_path=str(tmp_path / "dry.log"))
+    n = TelegramNotifier(TelegramConfig(bot_token=None, chat_id=None), db, dry_run_path=str(tmp_path / "dry.log"))
     assert n.send("hello", key="k1")
     assert not n.send("hello again", key="k1")
-    assert (tmp_path / "dry.log").read_text().count("hello") == 1
+    assert (tmp_path / "dry.log").read_text(encoding="utf-8").count("hello") == 1
 
 
 def test_retry_after_429_then_success(db, monkeypatch):

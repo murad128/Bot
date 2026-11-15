@@ -127,7 +127,8 @@ def cmd_check(cfg, args):
     try:
         print("  ", TelegramNotifier(cfg.telegram).test_connection())
     except Exception as exc:
-        print("  x", exc)
+        from core.redact import redact
+        print("  x", redact(str(exc)))
         ok = False
     print("== Economic calendar:", cfg.news.calendar_provider)
     cal = build_calendar(cfg.news, str(BASE_DIR / "data"))

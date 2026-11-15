@@ -1,7 +1,19 @@
+import os
 import sys
 from pathlib import Path
 
-import pytest
+# --- test isolation: must run before `config` is imported -----------------
+# Never read the real .env, never inherit real credentials / account settings
+# from the shell, and never load the real MetaTrader5 package (tests use fakes).
+os.environ["FXBOT_NO_DOTENV"] = "1"
+_SCRUB_PREFIXES = ("TELEGRAM_", "MT5_")
+_SCRUB_NAMES = {"FINNHUB_API_KEY", "FRED_API_KEY", "DATABASE_URL", "LOG_DIR", "BACKUP_DIR"}
+for _name in list(os.environ):
+    if _name.startswith(_SCRUB_PREFIXES) or _name in _SCRUB_NAMES:
+        del os.environ[_name]
+sys.modules["MetaTrader5"] = None  # `import MetaTrader5` raises ImportError in tests
+
+import pytest  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
