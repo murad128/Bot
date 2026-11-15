@@ -129,6 +129,8 @@ class SignalBot:
     # ------------------------------------------------------------------ learning capture (L1.1a)
     def _record_settings(self) -> Optional[str]:
         """Store the settings fingerprint once at start-up. Errors are logged only (no alert, no effect)."""
+        if not self.cfg.runtime.learning_capture:
+            return None
         try:
             from core.learning.fingerprint import record_settings
             self.settings_fingerprint = record_settings(self.db, self.cfg)
@@ -139,11 +141,26 @@ class SignalBot:
 
     def _archive_calendar(self, now: datetime) -> None:
         """Archive the events of a SUCCESSFUL calendar refresh. Errors are logged only."""
+        if not self.cfg.runtime.learning_capture:
+            return
         try:
             from core.learning.calendar_archive import archive_events
             archive_events(self.db, self.calendar.events, now)
         except Exception as exc:
             log.warning("Learning capture: calendar archive failed: %s", exc)
+
+    def _capture_snapshot(self, signal_id: int, candidate, ctx) -> None:
+        """L1.1b: market/SMC/news + indicator snapshot of a new signal. Runs after the signal was sent;
+        errors are logged only and never affect the signal."""
+        if not self.cfg.runtime.learning_capture:
+            return
+        try:
+            from core.learning.capture import capture_signal
+            fp = getattr(self, "settings_fingerprint", None) or self._record_settings()
+            expected = list(SCAN_TFS) + ([Timeframe.M1] if self.cfg.analysis.use_m1 else [])
+            capture_signal(self.db, self.engine, self.calendar, self.cfg, signal_id, candidate, ctx, fp, expected)
+        except Exception as exc:
+            log.warning("Learning capture: snapshot of signal %s failed: %s", signal_id, exc)
 
     # ------------------------------------------------------------------ alerts
     def alert(self, kind: str, level: str, text: str) -> None:
@@ -235,6 +252,7 @@ class SignalBot:
             return res
         msg = tm.signal_message(res.candidate, spec, rec.id)
         self.notifier.send(msg, kind="signal", key=f"signal:{rec.id}")
+        self._capture_snapshot(rec.id, res.candidate, ctx)   # learning capture: after delivery, isolated
         return res
 
     # ------------------------------------------------------------------ tracking

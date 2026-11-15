@@ -16,7 +16,7 @@ from sqlalchemy import select
 log = logging.getLogger(__name__)
 
 LEARNING_COMPONENT = "learning"
-LEARNING_SCHEMA_VERSION = 1
+LEARNING_SCHEMA_VERSION = 2          # 1: L1.1a tables, 2: + L1.1b snapshot tables (added, not altered)
 
 
 def ensure_learning_schema(session_factory) -> int:

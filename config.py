@@ -264,6 +264,8 @@ class RuntimeConfig:
     backup_keep: int = _env_int("BACKUP_KEEP", 14)
     stale_tick_seconds: int = _env_int("STALE_TICK_SECONDS", 180)
     error_alert_cooldown_min: int = _env_int("ERROR_ALERT_COOLDOWN_MIN", 30)
+    # learning-data capture (record only; never influences signals). false = record nothing
+    learning_capture: bool = _env_bool("LEARNING_CAPTURE", True)
 
 
 @dataclass
