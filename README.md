@@ -125,13 +125,37 @@ No trigger means no signal, whatever the score. This is the main defence against
 
 1. Install the Vantage MT5 terminal, log in, and add all symbols to **Market Watch**.
    Note any suffix (e.g. `XAUUSD+`).
-2. Install Python 3.11+ (64-bit). Then:
+2. Install **Python 3.12 (64-bit)** — see "Supported Python version" below. Then (Windows CMD):
    ```
    git clone <repo> fxbot && cd fxbot
-   python -m venv .venv && .venv\Scripts\activate
-   pip install -r requirements.txt
+   py -3.12 -m venv .venv && .venv\Scripts\activate
+   python --version                                  (must print Python 3.12.x)
+   python -m pip install --require-hashes -r requirements.lock.txt
+   python -m pytest -q
    copy .env.example .env      (then edit it)
    ```
+   `requirements.lock.txt` pins every package (including transitive ones) to an exact
+   version with SHA-256 hashes, so every install gets the same, tested set.
+   `requirements.txt` holds the pinned direct dependencies the lock is generated from.
+
+### Supported Python version
+
+| | |
+|---|---|
+| Supported | **Python 3.12**, 64-bit (VPS: Windows Server 2022, Python 3.12.10) |
+| Also tested | Python 3.13 on Linux (development/CI only) |
+| Not supported | Python ≤ 3.11 (numpy 2.5.4 requires ≥ 3.12), 32-bit Python (MetaTrader5 has no 32-bit wheel) |
+
+The lock file is resolved for Python 3.12 only. Changing the Python version, or any pin,
+means regenerating the lock (command in its header) and re-running the full test suite.
+
+To check an existing installation against the lock without changing anything:
+```
+python -m pip freeze
+```
+and compare the versions with `requirements.lock.txt`. To move an existing VPS to the
+lock, build a **new** venv next to the running one (e.g. `.venv312`), install and test
+there, then point the service at it — never reinstall packages into the venv of a running bot.
 3. Create a Telegram bot with **@BotFather** → `TELEGRAM_BOT_TOKEN`. Send it a
    message and read your chat id from `https://api.telegram.org/bot<token>/getUpdates`
    → `TELEGRAM_CHAT_ID`.

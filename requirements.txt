@@ -1,15 +1,28 @@
+# Direct dependencies, pinned to the exact versions running on the VPS (pip freeze of C:\fxbot\.venv),
+# verified with the full test suite.
+# Supported Python: 3.12 (64-bit) - see README "Supported Python version".
+#
+# For a reproducible install use the lock file (all transitive packages pinned, with hashes):
+#     python -m pip install --require-hashes -r requirements.lock.txt
+# This file is the human-edited source of the lock. After changing a pin here, regenerate the lock
+# (command at the top of requirements.lock.txt) and run the full test suite.
+
 # Core
-numpy>=1.26
-pandas>=2.2
-requests>=2.31
-SQLAlchemy>=2.0
-python-dotenv>=1.0
+numpy==2.5.4
+pandas==3.1.1
+requests==2.34.2
+SQLAlchemy==2.1.8
+python-dotenv==1.2.4
+# IANA time-zone database for zoneinfo (core/sessions.py, integrations/mt5_connector.py,
+# core/diagnostics.py). Windows has no system tz database, so zoneinfo needs this package there;
+# pandas only pulls it in implicitly and unpinned.
+tzdata==2026.6
 
 # Broker data - official MetaQuotes package, Windows only (the VPS running the MT5 terminal)
-MetaTrader5>=5.0.45; sys_platform == "win32"
+MetaTrader5==5.0.6231; sys_platform == "win32"
 
 # Optional: PostgreSQL instead of SQLite (set DATABASE_URL=postgresql+psycopg://...)
 # psycopg[binary]>=3.1
 
 # Tests
-pytest>=8.0
+pytest==9.2.0
