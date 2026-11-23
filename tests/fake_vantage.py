@@ -35,7 +35,7 @@ class FakeVantageMT5:
         idx = pd.date_range(end - timedelta(days=days), end, freq="1min", tz="UTC")
         server = to_server(idx)
         # market closed: Sat & Sun server time, plus daily break 00:00-01:00 server (gold)
-        open_mask = (server.dayofweek < 5) & (server.hour != 0)
+        open_mask = (server.day_of_week < 5) & (server.hour != 0)
         idx = idx[open_mask]
         n = len(idx)
         drift = np.repeat(rng.choice([-1, 1], n // 2000 + 1) * 0.00002, 2000)[:n]

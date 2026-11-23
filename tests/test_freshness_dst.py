@@ -115,9 +115,9 @@ def test_gaps_weekend_daily_break_and_holes_across_dst():
     hours = sorted({a.hour for a, _ in g["daily_break"]})
     assert hours == [21, 22]                                               # summer 21:00, winter 22:00 UTC
     # punch a 6h hole on a Wednesday and a 2h hole at the break time -> both are "other"
-    wed = m5.index[(m5.index.dayofweek == 2) & (m5.index.hour == 10)][0]
+    wed = m5.index[(m5.index.day_of_week == 2) & (m5.index.hour == 10)][0]
     holed = m5[~((m5.index >= wed) & (m5.index < wed + timedelta(hours=6)))]
-    brk = holed.index[(holed.index.dayofweek == 3) & (holed.index.hour == 20)][0]
+    brk = holed.index[(holed.index.day_of_week == 3) & (holed.index.hour == 20)][0]
     holed = holed[~((holed.index >= brk) & (holed.index < brk + timedelta(hours=2)))]
     g2 = classify_gaps(holed, Timeframe.M5)
     assert len(g2["other"]) == 2

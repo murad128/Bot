@@ -39,8 +39,9 @@ def setup_logging(cfg: Config) -> None:
     fmt = RedactingFormatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     root = logging.getLogger()
     root.setLevel(cfg.log_level.upper())
-    for h in list(root.handlers):
+    for h in list(root.handlers):          # replace, and close, any previous handlers (no leaked file handles)
         root.removeHandler(h)
+        h.close()
     sh = logging.StreamHandler(sys.stdout)
     sh.setFormatter(fmt)
     root.addHandler(sh)
@@ -49,6 +50,9 @@ def setup_logging(cfg: Config) -> None:
     fh.setFormatter(fmt)
     root.addHandler(fh)
     sig = logging.getLogger("signals")
+    for h in list(sig.handlers):           # never stack a second signals.log handler on a repeated call
+        sig.removeHandler(h)
+        h.close()
     sh2 = logging.handlers.RotatingFileHandler(log_dir / "signals.log", maxBytes=10_000_000, backupCount=20,
                                                encoding="utf-8")
     sh2.setFormatter(fmt)

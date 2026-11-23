@@ -145,7 +145,7 @@ def synthetic_ohlc(n: int = 20000, tf: Timeframe = Timeframe.M5, start_price: fl
     """
     rng = np.random.default_rng(seed)
     idx = pd.date_range(start, periods=int(n * 1.45), freq=tf.pandas_rule, tz="UTC")
-    idx = idx[idx.dayofweek < 5][:n]
+    idx = idx[idx.day_of_week < 5][:n]
     drift = np.zeros(n)
     i = 0
     while i < n:

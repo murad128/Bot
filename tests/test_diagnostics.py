@@ -234,7 +234,7 @@ def test_diagnostic_flags_missing_recent_bars_and_internal_gaps(cfg, tmp_path, m
 
     m5 = fake._tf_bars(5)                                   # server clock (naive), NY + 7h
     # Fixed hole: the last Wednesday 10:00 server time that is at least 2 days before the data end
-    weds = m5.index[(m5.index.dayofweek == 2) & (m5.index.hour == 10) & (m5.index.minute == 0)
+    weds = m5.index[(m5.index.day_of_week == 2) & (m5.index.hour == 10) & (m5.index.minute == 0)
                     & (m5.index <= m5.index[-1] - timedelta(days=2))]
     hole_server = weds[-1]
     holes = (m5.index >= hole_server) & (m5.index < hole_server + timedelta(hours=6))

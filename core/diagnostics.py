@@ -110,7 +110,7 @@ def classify_gaps(df: pd.DataFrame, tf: Timeframe) -> Dict[str, list]:
             continue
         missing = gap - step
         start, end = prev + step, nxt
-        if start.dayofweek >= 4 and end.dayofweek in (6, 0) and missing >= pd.Timedelta(hours=40):
+        if start.day_of_week >= 4 and end.day_of_week in (6, 0) and missing >= pd.Timedelta(hours=40):
             out["weekend"].append((start, end))
         elif missing <= pd.Timedelta(minutes=75) and start.hour in (20, 21, 22, 23):
             out["daily_break"].append((start, end))

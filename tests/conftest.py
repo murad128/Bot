@@ -1,5 +1,9 @@
+import atexit
+import logging
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 # --- test isolation: must run before `config` is imported -----------------
@@ -7,11 +11,26 @@ from pathlib import Path
 # from the shell, and never load the real MetaTrader5 package (tests use fakes).
 os.environ["FXBOT_NO_DOTENV"] = "1"
 _SCRUB_PREFIXES = ("TELEGRAM_", "MT5_")
-_SCRUB_NAMES = {"FINNHUB_API_KEY", "FRED_API_KEY", "DATABASE_URL", "LOG_DIR", "BACKUP_DIR"}
+_SCRUB_NAMES = {"FINNHUB_API_KEY", "FRED_API_KEY", "DATABASE_URL", "LOG_DIR", "BACKUP_DIR", "CSV_DATA_DIR",
+                "CALENDAR_CSV_PATH"}
 for _name in list(os.environ):
     if _name.startswith(_SCRUB_PREFIXES) or _name in _SCRUB_NAMES:
         del os.environ[_name]
 sys.modules["MetaTrader5"] = None  # `import MetaTrader5` raises ImportError in tests
+
+# Every configurable path points into a per-session sandbox, so even a bare Config() in a test can
+# never reach the real logs/, data/bot.db, backups or historical CSVs of a bot running in the same folder.
+SANDBOX = Path(tempfile.mkdtemp(prefix="fxbot-tests-"))
+for _sub in ("logs", "data", "data/backups", "data/history"):
+    (SANDBOX / _sub).mkdir(parents=True, exist_ok=True)
+os.environ.update({
+    "LOG_DIR": str(SANDBOX / "logs"),
+    "BACKUP_DIR": str(SANDBOX / "data" / "backups"),
+    "DATABASE_URL": f"sqlite:///{SANDBOX / 'data' / 'bot.db'}",
+    "CSV_DATA_DIR": str(SANDBOX / "data" / "history"),
+    "CALENDAR_CSV_PATH": str(SANDBOX / "data" / "calendar.csv"),
+})
+atexit.register(shutil.rmtree, SANDBOX, ignore_errors=True)
 
 import pytest  # noqa: E402
 
@@ -21,6 +40,33 @@ if str(ROOT) not in sys.path:
 
 from config import load_config  # noqa: E402
 from core.domain import SymbolSpec  # noqa: E402
+
+# Modules that build paths from the hard-coded BASE_DIR (calendar cache, bot.lock, MT5 offset state,
+# diagnostics reports, the .env check). Their BASE_DIR is redirected to the sandbox for the whole run.
+_BASE_DIR_MODULES = ("main", "core.orchestrator", "core.diagnostics")
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _sandbox_base_dir():
+    import importlib
+    with pytest.MonkeyPatch.context() as mp:
+        for name in _BASE_DIR_MODULES:
+            mp.setattr(importlib.import_module(name), "BASE_DIR", SANDBOX)
+        yield SANDBOX
+
+
+@pytest.fixture(autouse=True)
+def _restore_logging():
+    """Close and remove every handler a test (e.g. main.setup_logging) attached, restore the levels."""
+    loggers = [logging.getLogger(), logging.getLogger("signals")]
+    before = [(lg, list(lg.handlers), lg.level) for lg in loggers]
+    yield
+    for lg, handlers, level in before:
+        for h in list(lg.handlers):
+            if h not in handlers:
+                lg.removeHandler(h)
+                h.close()
+        lg.setLevel(level)
 
 
 @pytest.fixture

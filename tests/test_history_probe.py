@@ -1,6 +1,7 @@
 """tools/history_probe.py against a mocked MetaTrader5 module (no terminal, no network)."""
 import types
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -186,7 +187,7 @@ def test_read_only_wrapper_and_no_orders(cfg_probe):
     with pytest.raises(PermissionError):
         prov.mt5.order_send
     assert mock.calls["order_send"] == 0
-    src = open(hp.__file__, encoding="utf-8").read()
+    src = Path(hp.__file__).read_text(encoding="utf-8")
     for fn in ("order_send(", "order_check(", "positions_get(", "orders_get(", "order_calc_margin(", "history_deals_get("):
         assert fn not in src
 

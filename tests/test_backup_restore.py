@@ -342,6 +342,7 @@ def test_concurrent_writer_process_refuses_live_restore(cfg, live, tmp_path):
             _live_restore(path, r, lock, tmp_path)
     finally:
         writer.wait(timeout=60)
+        writer.stdout.close()
     assert not list(path.parent.glob("*.pre-restore-*"))
     with closing(sqlite3.connect(str(path))) as c:                     # every write of the writer survived
         assert c.execute("select count(*) from kv_state where key like 'w%'").fetchone()[0] == 400
@@ -361,6 +362,8 @@ def test_process_holding_the_file_without_sqlite_lock_is_detected(cfg, live, tmp
         assert _dir_state(path) == before
     finally:
         holder.kill()
+        holder.wait(timeout=10)
+        holder.stdout.close()
 
 
 # ---------------------------------------------------------------- every failure point rolls back
@@ -501,6 +504,7 @@ def test_overwrite_never_replaces_a_bot_database_whatever_the_config(cfg, live, 
     other_cfg = type(cfg)()
     other_cfg.database_url = f"sqlite:///{tmp_path / 'elsewhere.db'}"
     other_cfg.runtime.backup_dir = cfg.runtime.backup_dir
+    other_cfg.log_dir = cfg.log_dir                                   # never the real logs/ folder
     monkeypatch.setattr(main, "load_config", lambda: other_cfg)
     assert main.main(["restore", "--from", str(r.path), "--to", str(path), "--overwrite"]) == 1
     assert "is a bot database" in capsys.readouterr().out
