@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal Bot Live</title>
+<style>
+:root{--bg:#070b12;--panel:#0d1420;--panel2:#111a29;--line:#1c2a3f;--txt:#d6e2f0;--mut:#6f849e;--grn:#19e68c;--red:#ff4d6a;
+--amb:#ffb020;--blu:#38bdf8;--vio:#a78bfa;--mono:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--txt);font:13px/1.45 var(--mono)}
+body{background:radial-gradient(1200px 600px at 70% -10%,#0f2238 0,transparent 60%),var(--bg);min-height:100vh}
+header{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:12px 18px;
+background:rgba(7,11,18,.92);border-bottom:1px solid var(--line);backdrop-filter:blur(6px);overflow:hidden}
+header:after{content:"";position:absolute;left:-30%;bottom:0;height:1px;width:30%;background:linear-gradient(90deg,transparent,var(--blu),transparent);animation:scan 4s linear infinite}
+@keyframes scan{to{left:100%}}
+h1{font-size:14px;letter-spacing:.18em;margin:0 12px 0 0;color:#e8f1ff}h1 b{color:var(--blu)}
+.pill{display:flex;gap:6px;align-items:center;padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:var(--panel);font-size:12px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--mut)}.ok .dot{background:var(--grn);box-shadow:0 0 8px var(--grn);animation:pulse 2s infinite}
+.bad .dot{background:var(--red);box-shadow:0 0 8px var(--red)}.warn .dot{background:var(--amb)}
+@keyframes pulse{50%{opacity:.35}}
+.ro{margin-left:auto;color:var(--amb);border-color:#4a3a12}
+main{padding:16px;display:grid;gap:16px}
+section{min-width:0;overflow-x:auto;background:linear-gradient(180deg,var(--panel),#0a111c);border:1px solid var(--line);border-radius:10px;padding:14px}
+section h2{margin:0 0 10px;font-size:11px;letter-spacing:.2em;color:var(--mut);font-weight:600}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr))}
+.card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:11px;position:relative;overflow:hidden}
+.card.signal{border-color:#1d6e4a;box-shadow:0 0 0 1px #19e68c33,0 0 24px #19e68c22}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px}.sym{font-size:15px;font-weight:700;letter-spacing:.06em}
+.chip{font-size:10px;padding:2px 7px;border-radius:4px;letter-spacing:.08em;border:1px solid var(--line);color:var(--mut)}
+.chip.signal{color:var(--grn);border-color:#19e68c66}.chip.rejected{color:var(--amb);border-color:#ffb02055}.chip.skipped{color:var(--red);border-color:#ff4d6a55}
+.mut{color:var(--mut)}.g{color:var(--grn)}.r{color:var(--red)}.a{color:var(--amb)}.b{color:var(--blu)}
+.pipe{display:grid;grid-template-columns:repeat(10,1fr);gap:3px;margin:10px 0 6px}
+.seg{height:7px;border-radius:2px;background:#1a2537;transform-origin:left;transition:background .25s}
+.seg.pass{background:var(--blu);animation:fill .45s both}.seg.fail{background:var(--red);animation:fill .45s both,blink 1.2s .6s infinite}
+.card.signal .seg.pass{background:var(--grn)}
+@keyframes fill{from{transform:scaleX(0)}to{transform:scaleX(1)}}@keyframes blink{50%{opacity:.3}}
+.reason{min-height:2.9em;color:#9fb3cb;font-size:12px}.small{font-size:11px}
+table{width:100%;border-collapse:collapse}th,td{padding:5px 6px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th{color:var(--mut);font-weight:500;font-size:11px}td:first-child,th:first-child{text-align:left}
+.kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-bottom:12px}
+.kpi{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:9px}.kpi .v{font-size:20px;font-weight:700}
+.ladder{position:relative;height:34px;margin:10px 0 24px;border-radius:4px;background:#0b1220;border:1px solid var(--line)}
+.mk{position:absolute;top:0;bottom:0;width:2px;transform:translateX(-1px)}.mk span{position:absolute;top:100%;left:50%;transform:translateX(-50%);font-size:10px;white-space:nowrap}
+.zone{position:absolute;top:6px;bottom:6px;opacity:.25}
+.prices{table-layout:fixed}.prices th,.prices td{padding:4px 2px;font-size:11.5px;text-align:center!important;overflow:hidden;text-overflow:clip}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(380px,100%),1fr));gap:16px}
+svg{display:block;width:100%}.err{color:var(--red)}
+.foot{color:var(--mut);font-size:11px;padding:0 18px 20px}
+.flash{animation:flash .8s}@keyframes flash{from{background:#16324d}}
+</style>
+</head>
+<body>
+<header>
+  <h1>FX/GOLD <b>LIVE</b> · SIGNAL BOT</h1>
+  <div class="pill" id="p-bot"><span class="dot"></span><span>BOT</span><span class="v">…</span></div>
+  <div class="pill" id="p-mt5"><span class="dot"></span><span>MT5</span><span class="v">…</span></div>
+  <div class="pill" id="p-tg"><span class="dot"></span><span>TELEGRAM</span><span class="v">…</span></div>
+  <div class="pill" id="p-cal"><span class="dot"></span><span>NEWS/CALENDAR</span><span class="v">…</span></div>
+  <div class="pill ro">READ-ONLY · NO TRADING</div>
+  <div class="pill"><span class="mut">UTC</span><span id="clock">--:--:--</span></div>
+</header>
+<main>
+  <div id="errors" class="err"></div>
+  <section><h2>INSTRUMENTS · LAST EVALUATION PIPELINE</h2><div class="grid" id="inst"></div></section>
+  <section><h2>ACTIVE SIGNALS</h2><div class="grid" id="open"></div></section>
+  <div class="two">
+    <section><h2>NEWS FILTER · HIGH-IMPACT EVENTS (NEXT 24H)</h2><div id="news"></div></section>
+    <section><h2>LEARNING ENGINE</h2><div id="learn"></div></section>
+  </div>
+  <section><h2>PERFORMANCE · ALL LIVE SIGNALS</h2><div class="kpis" id="kpis"></div><div id="equity"></div></section>
+  <div class="two">
+    <section><h2>BY INSTRUMENT</h2><div id="bysym"></div></section>
+    <section><h2>RECENT OUTCOMES</h2><div id="recent"></div></section>
+  </div>
+</main>
+<div class="foot">Real bot data only (bot.db read-only, logs/system.log, data/calendar_cache.json). Instrument status = the last evaluation
+the bot logged; the pipeline shows where it stopped (first failing filter). Score is a confluence measure, not a probability. N/A = not available.</div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+function el(tag, cls, text){ const e=document.createElement(tag); if(cls) e.className=cls; if(text!==undefined&&text!==null) e.textContent=String(text); return e; }
+const NA = "N/A";
+const dig = s => s.startsWith("XAU") ? 2 : s.endsWith("JPY") ? 3 : 5;
+const px = (v,s) => v===null||v===undefined ? NA : Number(v).toFixed(dig(s));
+const num = (v,d=2,sfx="") => v===null||v===undefined||Number.isNaN(Number(v)) ? NA : Number(v).toFixed(d)+sfx;
+const pct = v => v===null||v===undefined ? NA : (v*100).toFixed(1)+"%";
+function ago(iso){ if(!iso) return NA; const m=(Date.now()-Date.parse(iso))/60000; if(m<1) return "just now"; if(m<60) return Math.round(m)+"m ago"; if(m<2880) return (m/60).toFixed(1)+"h ago"; return (m/1440).toFixed(1)+"d ago"; }
+function pill(id, cls, text){ const p=$(id); p.classList.remove("ok","bad","warn"); if(cls) p.classList.add(cls); p.querySelector(".v").textContent=text; }
+const seen = {};
+
+function header(s){
+  const age = s.bot_last_log_age_min;
+  pill("p-bot", age===null?null:age<30?"ok":"warn", s.bot_last_log ? "last log "+ago(s.bot_last_log) : NA);
+  const m = s.mt5;
+  pill("p-mt5", !m?null:m.state==="CONNECTED"?"ok":"bad", m ? m.state+(m.account_mode?" · "+m.account_mode:"")+" · "+ago(m.since) : NA);
+  const t = s.db && s.db.telegram;
+  pill("p-tg", !t?null:(t.outbox_pending||0)>0?"warn":"ok", t ? "last sent "+ago(t.last_sent)+" · outbox "+(t.outbox_pending??NA) : NA);
+  const c = s.calendar, cl = s.calendar_log;
+  let ctext = NA, ccls = null;
+  if(c){ ctext = (c.provider||NA)+" · "+c.events+" events · "+ago(c.fetched_at); ccls = c.test_data ? "bad" : "ok"; if(c.test_data) ctext += " · TEST DATA IN CACHE"; }
+  if(cl && cl.ok===false){ ccls="bad"; ctext += " · last refresh FAILED"; }
+  pill("p-cal", ccls, ctext);
+  $("errors").textContent = (s.errors||[]).length ? "Read errors: "+s.errors.join(", ") : "";
+}
+
+function instruments(s){
+  const box=$("inst"); box.replaceChildren();
+  for(const sym of Object.keys(s.instruments)){
+    const v=s.instruments[sym], card=el("div","card"+(v&&v.status==="signal"?" signal":""));
+    const top=el("div","row"); top.append(el("span","sym",sym));
+    top.append(el("span","chip "+(v?v.status:""), v? v.status.toUpperCase() : NA)); card.append(top);
+    const meta=el("div","row small mut");
+    meta.append(el("span",null, v&&v.direction ? (v.direction==="BUY"?"▲ BUY":"▼ SELL") : "no direction"));
+    meta.append(el("span",null,"score "+(v&&v.score!==null?v.score:NA)));
+    meta.append(el("span",null, v ? ago(v.time) : NA)); card.append(meta);
+    const pipe=el("div","pipe"), changed = v && seen[sym]!==v.time+v.stage;
+    s.stages.forEach((name,i)=>{
+      const seg=el("div","seg"); seg.title=(i+1)+". "+name;
+      if(v){ if(i<v.stage) seg.classList.add("pass"); else if(i===v.stage && v.status!=="signal") seg.classList.add("fail"); }
+      seg.style.animationDelay = changed ? (i*0.07)+"s" : "0s";
+      if(!changed) seg.style.animation = (i===(v&&v.stage)&&v.status!=="signal") ? "blink 1.2s infinite" : "none";
+      pipe.append(seg);
+    });
+    card.append(pipe);
+    const stageName = v ? (v.status==="signal" ? "All stages passed → SIGNAL" : (v.status==="skipped"?"Skipped before analysis":"Stopped at: "+s.stages[v.stage])) : "No evaluation logged since the log start";
+    card.append(el("div","small "+(v&&v.status==="signal"?"g":"b"), stageName));
+    card.append(el("div","reason", v&&v.reason ? v.reason : ""));
+    if(v) seen[sym]=v.time+v.stage;
+    box.append(card);
+  }
+}
+
+function ladder(sig){
+  const pts=[["SL",sig.current_sl,"r"],["ENTRY",sig.entry,"b"],["TP1",sig.tp1,"g"],["TP2",sig.tp2,"g"],["TP3",sig.tp3,"g"]].filter(p=>p[1]!==null);
+  const vals=pts.map(p=>p[1]), lo=Math.min(...vals), hi=Math.max(...vals), span=(hi-lo)||1, pos=v=>4+92*(v-lo)/span;
+  const lad=el("div","ladder");
+  const z=el("div","zone"); z.style.left=Math.min(pos(sig.entry),pos(sig.current_sl))+"%"; z.style.width=Math.abs(pos(sig.entry)-pos(sig.current_sl))+"%"; z.style.background="var(--red)"; lad.append(z);
+  const z2=el("div","zone"); z2.style.left=Math.min(pos(sig.entry),pos(sig.tp3))+"%"; z2.style.width=Math.abs(pos(sig.tp3)-pos(sig.entry))+"%"; z2.style.background="var(--grn)"; lad.append(z2);
+  pts.forEach(([n,v,c],i)=>{ const m=el("div","mk"); m.style.left=pos(v)+"%"; m.style.background=`var(--${c==="r"?"red":c==="b"?"blu":"grn"})`;
+    if(n.startsWith("TP") && sig.tp_hits>=Number(n[2])) m.style.boxShadow="0 0 10px var(--grn)";
+    const l=el("span",c, n); m.append(l); lad.append(m); });
+  return lad;
+}
+
+function openSignals(s){
+  const box=$("open"); box.replaceChildren();
+  const list=(s.db&&s.db.open)||[];
+  if(!list.length){ box.append(el("div","mut", s.db ? "No active signals." : "bot.db not available (N/A).")); return; }
+  for(const g of list){
+    const c=el("div","card signal");
+    const top=el("div","row"); top.append(el("span","sym",g.symbol+"  #"+g.id)); top.append(el("span","chip signal",(g.direction==="BUY"?"▲ ":"▼ ")+g.direction)); c.append(top);
+    c.append(el("div","small mut",(g.setup_type||NA)+" · "+(g.session||NA)+" · score "+num(g.score,0)+" ("+(g.grade||NA)+") · "+ago(g.created_at)));
+    c.append(ladder(g)); c.append(el("div","small",""));
+    const t=el("table","prices"), hr=el("tr"); ["Entry","SL","TP1","TP2","TP3"].forEach(h=>hr.append(el("th",null,h))); t.append(hr);
+    const r=el("tr"); [g.entry,g.current_sl,g.tp1,g.tp2,g.tp3].forEach((v,i)=>r.append(el("td",i===1?"r":i===0?"b":"g",px(v,g.symbol)))); t.append(r); c.append(t);
+    const ctx=g.context||{};
+    c.append(el("div","small","TP hits "+(g.tp_hits??NA)+" · MFE "+num(g.mfe_r,2,"R")+" · MAE "+num(g.mae_r,2,"R")+" · SL "+(g.current_sl!==g.stop_loss?"moved":"initial")));
+    c.append(el("div","small b","HTF trend  D1 "+num(ctx.t_d1)+"  H4 "+num(ctx.t_h4)+"  H1 "+num(ctx.t_h1)+"  · bias "+num(ctx.bias)+" · zone "+(ctx.zone||NA)));
+    if(ctx.tags&&ctx.tags.length) c.append(el("div","small mut","tags: "+ctx.tags.join(", ")));
+    const sn=g.snapshot;
+    if(sn&&sn.smc){ const line=Object.entries(sn.smc).map(([tf,v])=>tf+" "+(v.trend>0?"▲":v.trend<0?"▼":"–")+" "+(v.zone||"")+(v.last_structure?" "+v.last_structure.kind:"")).join("  ·  ");
+      c.append(el("div","small","SMC snapshot ("+sn.status+"): "+line)); }
+    else c.append(el("div","small mut","SMC snapshot: N/A"));
+    box.append(c);
+  }
+}
+
+function news(s){
+  const box=$("news"); box.replaceChildren(); const c=s.calendar;
+  if(!c){ box.append(el("div","mut","Calendar cache not available (N/A).")); return; }
+  if(c.test_data) box.append(el("div","r small","⚠ The calendar cache contains the test-suite event (2030-01-01 CPI m/m) - it is test data, not a real calendar."));
+  const cl=s.calendar_log; box.append(el("div","small mut","Cache: provider "+(c.provider||NA)+" · fetched "+ago(c.fetched_at)+(cl?" · bot log: "+(cl.ok?"refreshed from "+cl.provider+" ("+cl.events+" events) ":"refresh FAILED ")+ago(cl.time):"")));
+  const blk=Object.entries(s.instruments).filter(([k,v])=>v&&v.stage===7&&v.status==="rejected");
+  box.append(el("div","small "+(blk.length?"a":"g"), blk.length ? "News/macro filter currently stopping: "+blk.map(([k,v])=>k).join(", ") : "No instrument's last evaluation was stopped by the news filter."));
+  if(!c.upcoming_high.length){ box.append(el("div","mut small","No high-impact events in the next 24h in the cache.")); return; }
+  const t=el("table"), h=el("tr"); ["Time (UTC)","Cur","Event","Fcst","Prev"].forEach(x=>h.append(el("th",null,x))); t.append(h);
+  for(const e of c.upcoming_high){ const r=el("tr"); r.append(el("td",null,e.time.slice(5,16).replace("T"," "))); r.append(el("td","a",e.currency)); const ti=el("td",null,e.title); ti.style.textAlign="left"; r.append(ti); r.append(el("td","mut",e.forecast??"")); r.append(el("td","mut",e.previous??"")); t.append(r); }
+  box.append(t);
+}
+
+function learning(s){
+  const box=$("learn"); box.replaceChildren(); const L=s.db&&s.db.learning;
+  if(!L){ box.append(el("div","mut","Learning data not available (N/A).")); return; }
+  const t=el("table");
+  [["Signal snapshots (L1.1b)", L.snapshots===null?NA:L.snapshots+" ("+(L.snapshots_complete??NA)+" complete)"],["Indicator snapshot rows",L.indicator_rows??NA],
+   ["Settings versions (fingerprints)",L.settings_versions??NA],["Code version",L.code_version?L.code_version.slice(0,10):NA],
+   ["Calendar events archived",L.calendar_archive??NA],["Recommendations pending review",L.recommendations_pending??NA],
+   ["Learning schema",L.schema?L.schema.map(x=>x.component+" v"+x.version).join(", "):NA]].forEach(([k,v])=>{ const r=el("tr"); r.append(el("td","mut",k)); r.append(el("td",null,v)); t.append(r); });
+  box.append(t);
+}
+
+function performance(s){
+  const k=$("kpis"); k.replaceChildren(); const d=s.db;
+  if(!d||!d.stats){ k.append(el("div","mut","No signal history (N/A).")); $("equity").replaceChildren(); $("bysym").replaceChildren(); $("recent").replaceChildren(); return; }
+  const st=d.stats;
+  [["Signals",st.total],["Open",st.open],["Closed",st.closed],["Win rate",pct(st.win_rate)],["Net R",num(st.net_r,2,"R")],["Profit factor",num(st.profit_factor)],
+   ["Expectancy",num(st.expectancy_r,2,"R")],["Max DD",num(st.max_drawdown_r,2,"R")],["TP1 / TP2 / TP3",st.tp1+" / "+st.tp2+" / "+st.tp3]].forEach(([n,v])=>{
+     const b=el("div","kpi"); b.append(el("div","mut small",n)); const val=el("div","v",v);
+     if(n==="Net R"&&st.net_r) val.className="v "+(st.net_r>0?"g":"r"); b.append(val); k.append(b); });
+  const eq=$("equity"); eq.replaceChildren();
+  if(d.equity.length>1){ const W=1000,H=120, ys=d.equity.map(p=>p.r), lo=Math.min(0,...ys), hi=Math.max(0,...ys), sp=(hi-lo)||1;
+    const ns="http://www.w3.org/2000/svg", svg=document.createElementNS(ns,"svg"); svg.setAttribute("viewBox",`0 0 ${W} ${H}`); svg.setAttribute("height","120");
+    const pts=d.equity.map((p,i)=>`${(i/(d.equity.length-1))*W},${H-6-(p.r-lo)/sp*(H-12)}`).join(" ");
+    const zero=document.createElementNS(ns,"line"); zero.setAttribute("x1",0); zero.setAttribute("x2",W); const zy=H-6-(0-lo)/sp*(H-12); zero.setAttribute("y1",zy); zero.setAttribute("y2",zy); zero.setAttribute("stroke","#1c2a3f"); svg.append(zero);
+    const pl=document.createElementNS(ns,"polyline"); pl.setAttribute("points",pts); pl.setAttribute("fill","none"); pl.setAttribute("stroke", ys[ys.length-1]>=0?"#19e68c":"#ff4d6a"); pl.setAttribute("stroke-width","2");
+    if(d.equity.length!==seen.__eq){ pl.setAttribute("stroke-dasharray","3000"); pl.setAttribute("stroke-dashoffset","3000"); pl.style.animation="draw 1.4s ease forwards"; }
+    seen.__eq=d.equity.length; svg.append(pl);
+    eq.append(el("div","small mut","Cumulative realised R per closed signal")); eq.append(svg); }
+  else eq.append(el("div","small mut","Equity curve needs at least 2 closed signals."));
+  const bs=$("bysym"); bs.replaceChildren(); const t=el("table"), h=el("tr"); ["Instrument","Signals","Closed","Win rate","Net R"].forEach(x=>h.append(el("th",null,x))); t.append(h);
+  for(const [sym,v] of Object.entries(d.by_symbol)){ const r=el("tr"); r.append(el("td",null,sym)); r.append(el("td",null,v.total)); r.append(el("td",null,v.closed)); r.append(el("td",null,pct(v.win_rate))); r.append(el("td",v.net_r>0?"g":v.net_r<0?"r":"",num(v.net_r,2,"R"))); t.append(r); }
+  bs.append(t);
+  const rc=$("recent"); rc.replaceChildren();
+  if(!d.recent.length){ rc.append(el("div","mut small","No closed signals yet.")); return; }
+  const t2=el("table"), h2=el("tr"); ["#","Instrument","Dir","Outcome","R","MFE","MAE","Closed"].forEach(x=>h2.append(el("th",null,x))); t2.append(h2);
+  for(const g of d.recent){ const r=el("tr"); r.append(el("td","mut",g.id)); r.append(el("td",null,g.symbol)); r.append(el("td",g.direction==="BUY"?"g":"r",g.direction));
+    r.append(el("td",g.outcome==="WIN"?"g":g.outcome==="LOSS"?"r":"a",g.outcome)); r.append(el("td",g.realized_r>0?"g":g.realized_r<0?"r":"",num(g.realized_r,2)));
+    r.append(el("td","mut",num(g.mfe_r,2))); r.append(el("td","mut",num(g.mae_r,2))); r.append(el("td","mut",ago(g.closed_at))); t2.append(r); }
+  rc.append(t2);
+}
+
+const style=document.createElement("style"); style.textContent="@keyframes draw{to{stroke-dashoffset:0}}"; document.head.append(style);
+async function refresh(){
+  try{ const r=await fetch("/api/state",{cache:"no-store"}); if(!r.ok) throw new Error("HTTP "+r.status); const s=await r.json();
+    header(s); instruments(s); openSignals(s); news(s); learning(s); performance(s);
+  }catch(e){ $("errors").textContent="Dashboard cannot reach its local server: "+e.message; }
+}
+setInterval(()=>{ $("clock").textContent=new Date().toISOString().slice(11,19); },1000);
+refresh(); setInterval(refresh,5000);
+</script>
+</body>
+</html>
