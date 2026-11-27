@@ -16,6 +16,7 @@ data/*.sqlite*
 data/backups/
 data/backtests/
 data/history/
+data/history_timemachine/
 data/calendar_cache.json
 data/mt5_server_offset.json
 data/bot.lock
