@@ -583,6 +583,29 @@ def test_rotation_never_deletes_newest_even_if_older_deletions_fail(cfg, live, m
     assert made[0].path.exists() and made[0].manifest.exists()       # refused deletion: kept with its manifest
 
 
+def test_rotation_keeps_newest_when_many_backups_share_one_second(cfg, live, monkeypatch):
+    from datetime import datetime as real_dt, timezone as tz
+
+    class FrozenClock(real_dt):                                       # every backup in the same second
+        @classmethod
+        def now(cls, tz_=None):
+            return real_dt(2026, 11, 28, 20, 36, 36, tzinfo=tz.utc)
+    monkeypatch.setattr(bk, "datetime", FrozenClock)
+    db, path = live
+    out = Path(cfg.runtime.backup_dir)
+    made = [create_backup(str(path), str(out), keep=3).path for _ in range(5)]
+    assert len(set(made)) == 5                                        # a freed name is never reused
+    assert list_backups(str(out)) == made[-3:]                        # exactly the 3 newest, in creation order
+    assert all(p.exists() for p in made[-3:]) and not any(p.exists() for p in made[:2])
+
+
+def test_timestamp_suffixes_sort_numerically(tmp_path):
+    for ts in ["20260101_000000", "20260101_000000_2", "20260101_000000_10", "20260101_000001"]:
+        (tmp_path / f"x_{ts}.db.gz").write_bytes(b"")
+    assert [p.name for p in list_backups(str(tmp_path))] == [
+        "x_20260101_000000.db.gz", "x_20260101_000000_2.db.gz", "x_20260101_000000_10.db.gz", "x_20260101_000001.db.gz"]
+
+
 def test_cli_allow_no_manifest(cfg, live, tmp_path, monkeypatch, capsys):
     import main
     db, path = live

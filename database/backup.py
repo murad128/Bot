@@ -192,12 +192,26 @@ def _open_source(src: Path) -> Tuple[sqlite3.Connection, bool]:
 
 
 def _timestamp_name(stem: str, out_dir: Path) -> str:
+    """<stem>_<YYYYmmdd_HHMMSS>[_<n>]; within one second, n is always above every existing suffix.
+
+    Choosing max(existing)+1 (rather than the first free name) keeps names strictly increasing even
+    after rotation has deleted the base name or lower suffixes of the same second.
+    """
     base = f"{stem}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}"
-    name, i = base, 1
-    while (out_dir / f"{name}.db.gz").exists() or (out_dir / f"{name}.db").exists():
-        name = f"{base}_{i}"
-        i += 1
-    return name
+    taken = -1                                    # -1: nothing for this second; 0: the bare base name
+    for p in out_dir.iterdir():
+        m = BACKUP_RE.match(p.name)
+        if not m or m.group("stem") != stem:
+            continue
+        ts_base, suffix = m.group("ts")[:15], m.group("ts")[16:]
+        if f"{stem}_{ts_base}" == base:
+            taken = max(taken, int(suffix) if suffix else 0)
+    return base if taken < 0 else f"{base}_{taken + 1}"
+
+
+def _ts_key(ts: str) -> Tuple[str, int]:
+    """Sort key for a backup timestamp: numeric suffix order (_2 before _10)."""
+    return ts[:15], int(ts[16:]) if len(ts) > 15 else -1
 
 
 def _manifest_path(backup: Path) -> Path:
@@ -247,7 +261,7 @@ def _groups(backup_dir: Path, stem: Optional[str]) -> List[Tuple[str, Path, List
         if m and p.is_file() and (stem is None or m.group("stem") == stem):
             by_name.setdefault((m.group("ts"), m.group("stem")), []).append(p)
     out = []
-    for (ts, _), files in sorted(by_name.items()):
+    for (ts, _), files in sorted(by_name.items(), key=lambda kv: (_ts_key(kv[0][0]), kv[0][1])):
         files.sort(key=lambda q: (not q.name.endswith(".gz"), q.name))
         out.append((ts, files[0], files[1:]))
     return out
